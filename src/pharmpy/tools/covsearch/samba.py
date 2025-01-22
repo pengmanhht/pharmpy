@@ -7,13 +7,26 @@ from typing import Literal, Optional, Union
 import statsmodels.api as sm
 
 import pharmpy.tools.covsearch.tool as scm_tool
+from pharmpy.basic.expr import Expr
 from pharmpy.deps import numpy as np
 from pharmpy.deps import pandas as pd
 from pharmpy.deps.scipy import stats
-from pharmpy.model import Model
+from pharmpy.model import (
+    Assignment,
+    EstimationStep,
+    ExecutionSteps,
+    Model,
+    NormalDistribution,
+    Parameter,
+    Parameters,
+    RandomVariables,
+    Statements,
+)
 from pharmpy.modeling import (
+    add_covariate_effect,
     add_estimation_step,
     calculate_bic,
+    convert_model,
     get_parameter_rv,
     mu_reference_model,
     remove_covariate_effect,
@@ -433,6 +446,20 @@ def linear_covariate_selection(
                 lrt_alpha=lrt_alpha,
                 linreg_method=linreg_method,
             )
+        elif stepwise_lcs is False and linreg_method.startswith("nm"):
+            selected, model_table = _nonmem_linear_covariate_selection(
+                context,
+                step,
+                data,
+                param,
+                eta_name,
+                covs,
+                nsamples=nsamples,
+                max_covariates=max_covariates,
+                selection_criterion=selection_criterion,
+                lrt_alpha=lrt_alpha,
+                linreg_method=linreg_method,
+            )
         else:
             selected, model_table = _linear_covariate_selection(
                 data,
@@ -689,7 +716,6 @@ def _linear_covariate_selection(
     model_records.append(base_res)
 
     for covariate in covariates:
-        # TODO: parallel the linear model fitting runs
         X = data_with_const[["const", covariate]]
         model = lin_func(endog=y, exog=X).fit()
         model_bic = partial_bic(model)
@@ -720,9 +746,185 @@ def _linear_covariate_selection(
 
     lcsres_table = pd.DataFrame([record.__dict__ for record in model_records])
     lcsres_table = lcsres_table.sort_values("lrt_pval" if selection_criterion == "lrt" else "bic")
-    # lcsres_table["lrt_positive"] = np.where(lcsres_table["lrt_pval"] < lrt_alpha, True, False)
 
     return selected, lcsres_table
+
+
+def _nonmem_linear_covariate_selection(
+    context,
+    step,
+    data,
+    parameter,
+    eta_name,
+    covariates,
+    nsamples=1,
+    max_covariates=None,
+    selection_criterion="lrt",
+    lrt_alpha=0.05,
+    linreg_method="nm_ols",
+):
+    """Linear covariate selection using BIC or LRT with NONMEM models"""
+    # TODO: modify _bic, _lrt, _ofv to support NONMEM models
+    # prepare data
+    # eta_name = get_parameter_rv(data, parameter, "iiv")[0]
+    data = data.rename(columns={eta_name: "DV"})
+    # initialize containers
+    model_records = []  # list, [LCSRecord]
+    scores = {}  # dict, {covariate: score}
+
+    # build workflow
+    wb = WorkflowBuilder(name="NONMEM LCS")
+    # base model
+    base_model = _create_base_model(data, parameter, linreg_method)
+    base_modelentry = ModelEntry.create(
+        model=base_model.replace(name=f"step{step}_lcs_{parameter}")
+    )
+    task = Task("linear_model_selection", lambda me: me, base_modelentry)
+    wb.add_task(task)
+
+    # add covariate effects
+    for covariate in covariates:
+        linc_model = add_covariate_effect(base_model, parameter, covariate, "lin", "+")
+        linc_modelentry = ModelEntry.create(
+            model=linc_model.replace(name=f"step{step}_lcs_{parameter}_{covariate}")
+        )
+        task = Task("linear_model_selection", lambda me: me, linc_modelentry)
+        wb.add_task(task)
+
+    # execute workflow
+    linear_model_fit = create_fit_workflow(n=len(covariates) + 1)
+    wb.insert_workflow(linear_model_fit)
+    task_gather = Task("gather", lambda *models: models)
+    wb.add_task(task_gather, predecessors=wb.output_tasks)
+    modelentries = context.call_workflow(Workflow(wb), "fit_linear_models")
+    assert len(modelentries) == len(covariates) + 1
+
+    # base model evaluation
+    base_me = modelentries[0]
+    base_fit = base_me.modelfit_results
+    base_bic = calculate_bic(base_me.model, base_fit.ofv, "fixed")  # TBD: fixed or mixed?
+    base_res = LCSRecord(
+        parameter=parameter,
+        inclusion=None,
+        bic=base_bic,
+        dbic=0.0,
+        ofv=base_fit.ofv,
+        dofv=None,
+        lrt_pval=None,
+        estimates=base_fit.parameter_estimates.to_dict(),
+    )
+    model_records.append(base_res)
+
+    # linear covariate model evaluation
+    for i, covariate in enumerate(covariates):
+        me = modelentries[i + 1]
+        model_fit = me.modelfit_results
+        model_bic = calculate_bic(me.model, model_fit.ofv, "fixed")  # TBD: fixed or mixed?
+        lrt_res = _nonlinear_step_lrt(base_me, me)
+        lrt_dofv, lrt_pval = lrt_res.dofv, lrt_res.lrt_pval
+        scores[covariate] = model_bic if selection_criterion == "bic" else lrt_pval
+        model_res = LCSRecord(
+            parameter=parameter,
+            inclusion=tuple([covariate]),
+            bic=model_bic,
+            dbic=base_bic - model_bic,
+            ofv=model_fit.ofv,
+            dofv=lrt_dofv,
+            lrt_pval=lrt_pval,
+            estimates=model_fit.parameter_estimates.to_dict(),
+        )
+        model_records.append(model_res)
+
+    # select covariates
+    sorted_candidates = sorted(scores.items(), key=lambda x: x[1])
+    max_covariates = min(max_covariates or len(sorted_candidates), len(sorted_candidates))
+    selected = [
+        candidate
+        for candidate, score in sorted_candidates[:max_covariates]
+        if (selection_criterion == "bic" and score < base_bic)
+        or (selection_criterion == "lrt" and score < lrt_alpha)
+    ]
+
+    # results table
+    lcsres_table = pd.DataFrame([record.__dict__ for record in model_records])
+    lcsres_table = lcsres_table.sort_values("lrt_pval" if selection_criterion == "lrt" else "bic")
+    return selected, lcsres_table
+
+
+def _create_base_model(data, parameter, linreg_method):
+    # a helper function to create NONMEM base linear covariate model
+    # parameters
+    theta = Parameter(name="theta", init=0.1)
+    sigma = Parameter(name="sigma", init=0.2)
+    omegas = {
+        "DUMMYETA": Parameter(name="OMEGA_DUMMYETA", init=0, fix=True),
+        "ETA_INT": Parameter(name="OMEGA_ETA_INT", init=0.1),
+        "ETA_EPS": Parameter(name="OMEGA_ETA_EPS", init=0.1),
+    }
+
+    eps_dist = NormalDistribution.create(name="epsilon", level="ruv", mean=0, variance=sigma.symbol)
+    eta_dists = {
+        name: NormalDistribution.create(name=name, level="iiv", mean=0, variance=omega.symbol)
+        for name, omega in omegas.items()
+    }
+
+    base = Assignment.create(symbol=Expr.symbol(parameter), expression=theta.symbol)
+    ipred = Assignment.create(
+        symbol=Expr.symbol("IPRED"),
+        expression=base.symbol * Expr.exp(Expr.symbol("DUMMYETA")),
+    )
+
+    if linreg_method == "nm_ols":
+        params = Parameters((theta, sigma))
+        random_vars = RandomVariables.create(dists=[eps_dist, eta_dists["DUMMYETA"]])
+        y_expr = Expr.symbol("IPRED") + Expr.symbol("epsilon")
+    elif linreg_method == "nm_wls":
+        params = Parameters((theta, sigma))
+        random_vars = RandomVariables.create(dists=[eps_dist, eta_dists["DUMMYETA"]])
+        y_expr = Expr.symbol("IPRED") + Expr.symbol("epsilon") * Expr.sqrt(Expr.symbol("ETC"))
+    elif linreg_method == "nm_lme":
+        params = Parameters((theta, sigma, *omegas.values()))
+        random_vars = RandomVariables.create(dists=[eps_dist, *eta_dists.values()])
+        y_expr = (
+            Expr.symbol("IPRED")
+            + Expr.symbol("ETA_INT")
+            + Expr.symbol("epsilon") * Expr.exp(Expr.symbol("ETA_EPS"))
+        )
+    else:
+        raise ValueError(
+            f"Unsupported regression method: {linreg_method}. Supported methods: nm_ols, nm_wls, nm_lme"
+        )
+
+    y = Assignment.create(symbol=Expr.symbol("Y"), expression=y_expr)
+    statements = Statements([base, ipred, y])
+    est = EstimationStep.create(
+        method="FOCE",
+        maximum_evaluations=99999,
+        interaction=True,
+        tool_options={"NSIG": "2", "PRINT": "1", "NOHABORT": 0},
+    )
+    name = f"{parameter}_base"
+
+    base_model = Model.create(
+        name=name,
+        parameters=params,
+        random_variables=random_vars,
+        statements=statements,
+        dataset=data,
+        description=name,
+        execution_steps=ExecutionSteps.create([est]),
+        dependent_variables={y.symbol: 1},
+    )
+
+    di = base_model.datainfo
+    di = di.set_dv_column("DV")
+    di = di.set_id_column("ID")
+    di = di.set_idv_column(
+        data.columns.difference(["ID", "DV"]).tolist()[0]
+    )  # TODO: remove if use _bic
+    base_model = base_model.replace(datainfo=di)
+    base_model = convert_model(base_model, to_format="nonmem")
+    return base_model
 
 
 def _get_linreg_method(linreg_method, data, parameter):
@@ -825,7 +1027,6 @@ def samba_nonlinear_model_selection(
     updated_model = update_initial_estimates(best_model, best_candidate.modelentry.modelfit_results)
     updated_desc = best_model.description
     updated_steps = best_candidate.steps
-    # update_occurs = False  # Track whether any update occurs to the model
     # prune effect funcs to avoid redundant or invalid updates
     pruned_effects = _prune_effect_funcs(effect_funcs, updated_model, step, context)
     if not pruned_effects:
@@ -837,13 +1038,6 @@ def samba_nonlinear_model_selection(
         updated_model = cov_func(updated_model)
         updated_steps = updated_steps + (SAMBAStep(lrt_alpha, DummyEffect(*cov_effect)),)
         # update_occurs = True
-
-    # # if no changes are made, skip further processing
-    # if not update_occurs:
-    #     context.log_info(
-    #         f"STEP {step} | NONLINEAR MODEL SELECTION\n" f"    No new covariate effects are added."
-    #     )
-    #     return search_state
 
     updated_model = updated_model.replace(name=f"step{step}", description=updated_desc)
 
@@ -896,7 +1090,6 @@ def scmlcs_nonlinear_model_selection(
 
     scores, new_models, candidate_steps = {}, {}, {}
     for cov_effect, cov_func in pruned_effects.items():
-
         name = f"step{step}_" + "_".join(cov_effect[:3])
         desc = best_model.description + f";({'-'.join(cov_effect[:3])})"
         model = updated_model.replace(name=name, description=desc)

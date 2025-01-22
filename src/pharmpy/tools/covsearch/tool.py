@@ -136,7 +136,7 @@ def create_workflow(
     nsamples: int = 10,
     samba_max_covariates: Optional[int] = 3,
     samba_selection_criterion: Literal['bic', 'lrt'] = 'bic',
-    samba_linreg_method: Literal['ols', 'wls', 'lme'] = 'ols',
+    samba_linreg_method: Literal['ols', 'wls', 'lme', 'nm_ols', 'nm_wls', 'nm_lme'] = 'ols',
     samba_stepwise_lcs: Optional[bool] = None,
 ):
     """Run COVsearch tool. For more details, see :ref:`covsearch`.
