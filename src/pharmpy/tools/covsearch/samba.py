@@ -31,6 +31,7 @@ from pharmpy.modeling import (
     mu_reference_model,
     remove_covariate_effect,
     remove_estimation_step,
+    unconstrain_parameters,
 )
 from pharmpy.modeling.expressions import depends_on
 from pharmpy.tools.common import (
@@ -797,6 +798,7 @@ def _nonmem_stepwise_linear_covariate_selection(
         wb.add_task(task)
         for covariate in remaining:
             linc_model = add_covariate_effect(base_model, parameter, covariate, "lin", "+")
+            linc_model = unconstrain_parameters(linc_model, f"POP_{parameter}{covariate}")
             linc_modelentry = ModelEntry.create(
                 model=linc_model.replace(name=f"step{step}_lcs{lin_step+1}_{parameter}_{covariate}")
             )
@@ -912,6 +914,7 @@ def _nonmem_linear_covariate_selection(
     # add covariate effects
     for covariate in covariates:
         linc_model = add_covariate_effect(base_model, parameter, covariate, "lin", "+")
+        linc_model = unconstrain_parameters(linc_model, f"POP_{parameter}{covariate}")
         linc_modelentry = ModelEntry.create(
             model=linc_model.replace(name=f"step{step}_lcs_{parameter}_{covariate}")
         )
