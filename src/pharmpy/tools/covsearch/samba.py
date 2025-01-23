@@ -435,7 +435,21 @@ def linear_covariate_selection(
 
     for param, covs in param_indexed_covars.items():
         eta_name = get_parameter_rv(modelentry.model, param, "iiv")[0]
-        if stepwise_lcs:
+        if stepwise_lcs and linreg_method.startswith("nm"):
+            selected, model_table = _nonmem_stepwise_linear_covariate_selection(
+                context,
+                step,
+                data,
+                param,
+                eta_name,
+                covs,
+                nsamples=nsamples,
+                max_covariates=max_covariates,
+                selection_criterion=selection_criterion,
+                lrt_alpha=lrt_alpha,
+                linreg_method=linreg_method,
+            )
+        elif stepwise_lcs:
             selected, model_table = _stepwise_linear_covariate_selection(
                 data,
                 eta_name,
@@ -749,6 +763,119 @@ def _linear_covariate_selection(
 
     return selected, lcsres_table
 
+def _nonmem_stepwise_linear_covariate_selection(
+    context,
+    step,
+    data,
+    parameter,
+    eta_name,
+    covariates,
+    nsamples=1,
+    max_covariates=None,
+    selection_criterion="lrt",
+    lrt_alpha=0.05,
+    linreg_method="nm_ols",
+):
+    """Stepwise linear covariate selection with NONMEM models"""
+    # TODO: modify _bic, _lrt, _ofv to support NONMEM models
+    data = data.rename(columns={eta_name: "DV"})
+    lin_step = 0
+    selected = []
+    remaining = covariates
+    model_records = []
+    
+    while remaining and (max_covariates is None or len(selected) < max_covariates):
+        scores, models = {}, {}
+        # build workflow
+        wb = WorkflowBuilder(name="NONMEM swLCS")
+        # base model
+        base_model = _create_base_model(data, parameter, linreg_method)
+        base_modelentry = ModelEntry.create(
+            model=base_model.replace(name=f"step{step}_lcs{lin_step+1}_{parameter}")
+        )
+        task = Task("linear_model_selection", lambda me: me, base_modelentry)
+        wb.add_task(task)
+        for covariate in remaining:
+            linc_model = add_covariate_effect(base_model, parameter, covariate, "lin", "+")
+            linc_modelentry = ModelEntry.create(
+                model=linc_model.replace(name=f"step{step}_lcs{lin_step+1}_{parameter}_{covariate}")
+            )
+            task = Task("linear_model_selection", lambda me: me, linc_modelentry)
+            wb.add_task(task)
+        # execute workflow
+        linear_model_fit = create_fit_workflow(n=len(remaining) + 1)
+        wb.insert_workflow(linear_model_fit)
+        task_gather = Task("gather", lambda *models: models)
+        wb.add_task(task_gather, predecessors=wb.output_tasks)
+        modelentries = context.call_workflow(Workflow(wb), "fit_linear_models")
+        assert len(modelentries) == len(remaining) + 1
+        
+        # base model evaluation
+        base_me = modelentries[0]
+        base_fit = base_me.modelfit_results
+        base_bic = calculate_bic(base_me.model, base_fit.ofv, "fixed")  # TBD: fixed or mixed?
+        base_res = SWLCSRecord(
+            lcs_step=1,
+            parameter=parameter,
+            inclusion=None,
+            bic=base_bic,
+            dbic=0.0,
+            ofv=base_fit.ofv,
+            dofv=None,
+            lrt_pval=None,
+            parent=None,
+            selection=selected,
+            estimates=base_fit.parameter_estimates.to_dict(),
+        )
+        model_records.append(base_res)
+        best_me = base_me
+        best_bic = base_bic
+        
+        # linear covariate model evaluation
+        for i, covariate in enumerate(remaining):
+            me = modelentries[i + 1]
+            model_fit = me.modelfit_results
+            model_bic = calculate_bic(me.model, model_fit.ofv, "fixed")
+            lrt_res = _nonlinear_step_lrt(best_me, me)
+            lrt_dofv, lrt_pval = lrt_res.dofv, lrt_res.lrt_pval
+            scores[covariate] = model_bic if selection_criterion == "bic" else lrt_pval
+            models[covariate] = me
+            model_res = SWLCSRecord(
+                lcs_step=lin_step + 1,
+                parameter=parameter,
+                inclusion=tuple(selected + [covariate]),
+                bic=model_bic,
+                dbic=base_bic - model_bic,
+                ofv=model_fit.ofv,
+                dofv=lrt_dofv,
+                lrt_pval=lrt_pval,
+                parent=tuple(selected),
+                selection=selected,
+                estimates=model_fit.parameter_estimates.to_dict(),
+            )
+            model_records.append(model_res)
+        
+        # select covariates
+        best_candidate = min(scores, key=scores.get)
+        if (selection_criterion == "bic" and scores[best_candidate] < best_bic) or (
+            selection_criterion == "lrt" and scores[best_candidate] < lrt_alpha
+        ):
+            selected.append(best_candidate)
+            remaining.remove(best_candidate)
+            best_me = models[best_candidate]
+            best_bic = calculate_bic(best_me.model, best_me.modelfit_results.ofv, "fixed")
+            
+            lin_step += 1
+        else: # stop if no improvement is made
+            break
+    
+    # covert records to DataFrame
+    lcsres_table = pd.DataFrame([record.__dict__ for record in model_records])
+    lcsres_table = lcsres_table.sort_values(
+        ["lcs_step", "lrt_pval"] if selection_criterion == "lrt" else ["lcs_step", "bic"]
+    )
+    
+    return selected, lcsres_table
 
 def _nonmem_linear_covariate_selection(
     context,
