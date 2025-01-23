@@ -123,6 +123,7 @@ def samba_workflow(
     selection_criterion: Literal['bic', 'lrt'] = 'bic',
     linreg_method: Literal['ols', 'wls', 'lme'] = 'ols',
     stepwise_lcs: Optional[bool] = None,
+    nonmem_lcs: bool = True,
     strictness: str = "minimization_successful or (rounding_errors and sigdigs>=0.1)",
 ):
     """
@@ -150,6 +151,7 @@ def samba_workflow(
         linreg_method,
         algorithm,
         stepwise_lcs,
+        nonmem_lcs,
     )
     wb.add_task(samba_search_task, predecessors=init_task)
     search_output = wb.output_tasks
@@ -179,6 +181,7 @@ def samba_forward(
     linreg_method,
     algorithm,
     stepwise_lcs,
+    nonmem_lcs,
     state_and_effect,
 ):
     if algorithm == "scm-lcs" and linreg_method in ["ols", "wls"] and nsamples != 1:
@@ -211,6 +214,7 @@ def samba_forward(
             lrt_alpha,
             linreg_method,
             stepwise_lcs,
+            nonmem_lcs,
         )
         # nonlinear selection
         if algorithm.startswith('samba') or stepwise_lcs:
@@ -420,6 +424,7 @@ def linear_covariate_selection(
     lrt_alpha=0.05,
     linreg_method="ols",
     stepwise_lcs=None,
+    nonmem_lcs=True,
 ):
     search_state = state_and_effect.search_state
     effect_funcs = state_and_effect.effect_funcs
@@ -436,7 +441,7 @@ def linear_covariate_selection(
 
     for param, covs in param_indexed_covars.items():
         eta_name = get_parameter_rv(modelentry.model, param, "iiv")[0]
-        if stepwise_lcs and linreg_method.startswith("nm"):
+        if stepwise_lcs and nonmem_lcs: 
             selected, model_table = _nonmem_stepwise_linear_covariate_selection(
                 context,
                 step,
@@ -461,7 +466,7 @@ def linear_covariate_selection(
                 lrt_alpha=lrt_alpha,
                 linreg_method=linreg_method,
             )
-        elif stepwise_lcs is False and linreg_method.startswith("nm"):
+        elif stepwise_lcs is False and nonmem_lcs:
             selected, model_table = _nonmem_linear_covariate_selection(
                 context,
                 step,
@@ -775,7 +780,7 @@ def _nonmem_stepwise_linear_covariate_selection(
     max_covariates=None,
     selection_criterion="lrt",
     lrt_alpha=0.05,
-    linreg_method="nm_ols",
+    linreg_method="ols",
 ):
     """Stepwise linear covariate selection with NONMEM models"""
     # TODO: modify _bic, _lrt, _ofv to support NONMEM models

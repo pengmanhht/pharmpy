@@ -136,8 +136,9 @@ def create_workflow(
     nsamples: int = 10,
     samba_max_covariates: Optional[int] = 3,
     samba_selection_criterion: Literal['bic', 'lrt'] = 'bic',
-    samba_linreg_method: Literal['ols', 'wls', 'lme', 'nm_ols', 'nm_wls', 'nm_lme'] = 'ols',
+    samba_linreg_method: Literal['ols', 'wls', 'lme'] = 'ols',
     samba_stepwise_lcs: Optional[bool] = None,
+    samba_nonmem_lcs: bool = True,
 ):
     """Run COVsearch tool. For more details, see :ref:`covsearch`.
 
@@ -184,6 +185,8 @@ def create_workflow(
     samba_stepwise_lcs: bool or None
         Use stepwise linear covariate screening or not. By default, SAMBA methods use stepwise LCS whereas SCM-LCS uses
         non-stepwise LCS.
+    samba_nonmem_lcs: bool
+        Use nonmem or statsmodels for linear covariate screening. Default is True (nonmem)
 
     Returns
     -------
@@ -214,6 +217,7 @@ def create_workflow(
             selection_criterion=samba_selection_criterion,
             linreg_method=samba_linreg_method,
             stepwise_lcs=samba_stepwise_lcs,
+            nonmem_lcs=samba_nonmem_lcs,
             strictness=strictness,
         )
 
