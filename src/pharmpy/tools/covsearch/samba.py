@@ -5,6 +5,7 @@ from itertools import chain, count
 from typing import Literal, Optional, Union
 
 import statsmodels.api as sm
+from statsmodels.base.wrapper import ResultsWrapper
 
 import pharmpy.tools.covsearch.tool as scm_tool
 from pharmpy.basic.expr import Expr
@@ -783,9 +784,12 @@ def _nonmem_stepwise_linear_covariate_selection(
     linreg_method="ols",
 ):
     """Stepwise linear covariate selection with NONMEM models"""
-    # TODO: modify _bic, _lrt, _ofv to support NONMEM models
+    partial_ofv = partial(_ofv, nsamples=nsamples, linreg_method=linreg_method)
+    partial_bic = partial(_bic, nsamples=nsamples, linreg_method=linreg_method)
+    partial_lrt = partial(_lrt, nsamples=nsamples, linreg_method=linreg_method)
+    
     data = data.rename(columns={eta_name: "DV"})
-    lin_step = 0
+    lin_step = 1
     selected = []
     remaining = covariates
     model_records = []
@@ -795,9 +799,9 @@ def _nonmem_stepwise_linear_covariate_selection(
         # build workflow
         wb = WorkflowBuilder(name="NONMEM swLCS")
         # base model
-        base_model = _create_base_model(data, parameter, linreg_method)
+        base_model = _create_base_model(data, parameter, eta_name, linreg_method)
         base_modelentry = ModelEntry.create(
-            model=base_model.replace(name=f"step{step}_lcs{lin_step+1}_{parameter}")
+            model=base_model.replace(name=f"step{step}_lcs{lin_step}_{parameter}")
         )
         task = Task("linear_model_selection", lambda me: me, base_modelentry)
         wb.add_task(task)
@@ -805,7 +809,7 @@ def _nonmem_stepwise_linear_covariate_selection(
             linc_model = add_covariate_effect(base_model, parameter, covariate, "lin", "+")
             linc_model = unconstrain_parameters(linc_model, f"POP_{parameter}{covariate}")
             linc_modelentry = ModelEntry.create(
-                model=linc_model.replace(name=f"step{step}_lcs{lin_step+1}_{parameter}_{covariate}")
+                model=linc_model.replace(name=f"step{step}_lcs{lin_step}_{parameter}_{covariate}")
             )
             task = Task("linear_model_selection", lambda me: me, linc_modelentry)
             wb.add_task(task)
@@ -820,14 +824,15 @@ def _nonmem_stepwise_linear_covariate_selection(
         # base model evaluation
         base_me = modelentries[0]
         base_fit = base_me.modelfit_results
-        base_bic = calculate_bic(base_me.model, base_fit.ofv, "fixed")  # TBD: fixed or mixed?
+        base_bic = partial_bic(base_me)
+        base_ofv = partial_ofv(base_fit)
         base_res = SWLCSRecord(
             lcs_step=1,
             parameter=parameter,
             inclusion=None,
             bic=base_bic,
             dbic=0.0,
-            ofv=base_fit.ofv,
+            ofv=base_ofv,
             dofv=None,
             lrt_pval=None,
             parent=None,
@@ -842,18 +847,18 @@ def _nonmem_stepwise_linear_covariate_selection(
         for i, covariate in enumerate(remaining):
             me = modelentries[i + 1]
             model_fit = me.modelfit_results
-            model_bic = calculate_bic(me.model, model_fit.ofv, "fixed")
-            lrt_res = _nonlinear_step_lrt(best_me, me)
-            lrt_dofv, lrt_pval = lrt_res.dofv, lrt_res.lrt_pval
+            model_bic = partial_bic(me)
+            model_ofv = partial_ofv(model_fit)
+            lrt_dofv, lrt_pval = partial_lrt(best_me, me)
             scores[covariate] = model_bic if selection_criterion == "bic" else lrt_pval
             models[covariate] = me
             model_res = SWLCSRecord(
-                lcs_step=lin_step + 1,
+                lcs_step=lin_step,
                 parameter=parameter,
                 inclusion=tuple(selected + [covariate]),
                 bic=model_bic,
                 dbic=base_bic - model_bic,
-                ofv=model_fit.ofv,
+                ofv=model_ofv,
                 dofv=lrt_dofv,
                 lrt_pval=lrt_pval,
                 parent=tuple(selected),
@@ -870,7 +875,7 @@ def _nonmem_stepwise_linear_covariate_selection(
             selected.append(best_candidate)
             remaining.remove(best_candidate)
             best_me = models[best_candidate]
-            best_bic = calculate_bic(best_me.model, best_me.modelfit_results.ofv, "fixed")
+            best_bic = calculate_bic(best_me.model, best_me.modelfit_results.ofv, "random")
             
             lin_step += 1
         else: # stop if no improvement is made
@@ -895,10 +900,13 @@ def _nonmem_linear_covariate_selection(
     max_covariates=None,
     selection_criterion="lrt",
     lrt_alpha=0.05,
-    linreg_method="nm_ols",
+    linreg_method="ols",
 ):
     """Linear covariate selection using BIC or LRT with NONMEM models"""
-    # TODO: modify _bic, _lrt, _ofv to support NONMEM models
+    partial_ofv = partial(_ofv, nsamples=nsamples, linreg_method=linreg_method)
+    partial_bic = partial(_bic, nsamples=nsamples, linreg_method=linreg_method)
+    partial_lrt = partial(_lrt, nsamples=nsamples, linreg_method=linreg_method)
+    
     # prepare data
     # eta_name = get_parameter_rv(data, parameter, "iiv")[0]
     data = data.rename(columns={eta_name: "DV"})
@@ -909,7 +917,7 @@ def _nonmem_linear_covariate_selection(
     # build workflow
     wb = WorkflowBuilder(name="NONMEM LCS")
     # base model
-    base_model = _create_base_model(data, parameter, linreg_method)
+    base_model = _create_base_model(data, parameter, eta_name, linreg_method)
     base_modelentry = ModelEntry.create(
         model=base_model.replace(name=f"step{step}_lcs_{parameter}")
     )
@@ -937,13 +945,14 @@ def _nonmem_linear_covariate_selection(
     # base model evaluation
     base_me = modelentries[0]
     base_fit = base_me.modelfit_results
-    base_bic = calculate_bic(base_me.model, base_fit.ofv, "fixed")  # TBD: fixed or mixed?
+    base_ofv = partial_ofv(base_fit)
+    base_bic = partial_bic(base_me)
     base_res = LCSRecord(
         parameter=parameter,
         inclusion=None,
         bic=base_bic,
         dbic=0.0,
-        ofv=base_fit.ofv,
+        ofv=base_ofv,
         dofv=None,
         lrt_pval=None,
         estimates=base_fit.parameter_estimates.to_dict(),
@@ -954,16 +963,16 @@ def _nonmem_linear_covariate_selection(
     for i, covariate in enumerate(covariates):
         me = modelentries[i + 1]
         model_fit = me.modelfit_results
-        model_bic = calculate_bic(me.model, model_fit.ofv, "fixed")  # TBD: fixed or mixed?
-        lrt_res = _nonlinear_step_lrt(base_me, me)
-        lrt_dofv, lrt_pval = lrt_res.dofv, lrt_res.lrt_pval
+        model_ofv = partial_ofv(model_fit)
+        model_bic = partial_bic(me)
+        lrt_dofv, lrt_pval = partial_lrt(base_me, me)
         scores[covariate] = model_bic if selection_criterion == "bic" else lrt_pval
         model_res = LCSRecord(
             parameter=parameter,
             inclusion=tuple([covariate]),
             bic=model_bic,
             dbic=base_bic - model_bic,
-            ofv=model_fit.ofv,
+            ofv=model_ofv,
             dofv=lrt_dofv,
             lrt_pval=lrt_pval,
             estimates=model_fit.parameter_estimates.to_dict(),
@@ -986,7 +995,7 @@ def _nonmem_linear_covariate_selection(
     return selected, lcsres_table
 
 
-def _create_base_model(data, parameter, linreg_method):
+def _create_base_model(data, parameter, eta_name, linreg_method):
     # a helper function to create NONMEM base linear covariate model
     # parameters
     theta = Parameter(name="theta", init=0.1)
@@ -1009,15 +1018,15 @@ def _create_base_model(data, parameter, linreg_method):
         expression=base.symbol * Expr.exp(Expr.symbol("DUMMYETA")),
     )
 
-    if linreg_method == "nm_ols":
-        params = Parameters((theta, sigma))
+    if linreg_method == "ols":
+        params = Parameters((theta, sigma, omegas["DUMMYETA"]))
         random_vars = RandomVariables.create(dists=[eps_dist, eta_dists["DUMMYETA"]])
         y_expr = Expr.symbol("IPRED") + Expr.symbol("epsilon")
-    elif linreg_method == "nm_wls":
-        params = Parameters((theta, sigma))
+    elif linreg_method == "wls":
+        params = Parameters((theta, sigma, omegas["DUMMYETA"]))
         random_vars = RandomVariables.create(dists=[eps_dist, eta_dists["DUMMYETA"]])
-        y_expr = Expr.symbol("IPRED") + Expr.symbol("epsilon") * Expr.sqrt(Expr.symbol("ETC"))
-    elif linreg_method == "nm_lme":
+        y_expr = Expr.symbol("IPRED") + Expr.symbol("epsilon") * Expr.sqrt(Expr.symbol(eta_name.replace("ETA", "ETC")))
+    elif linreg_method == "lme":
         params = Parameters((theta, sigma, *omegas.values()))
         random_vars = RandomVariables.create(dists=[eps_dist, *eta_dists.values()])
         y_expr = (
@@ -1027,7 +1036,7 @@ def _create_base_model(data, parameter, linreg_method):
         )
     else:
         raise ValueError(
-            f"Unsupported regression method: {linreg_method}. Supported methods: nm_ols, nm_wls, nm_lme"
+            f"Unsupported regression method: {linreg_method}. Supported methods: ols, wls, lme"
         )
 
     y = Assignment.create(symbol=Expr.symbol("Y"), expression=y_expr)
@@ -1056,7 +1065,7 @@ def _create_base_model(data, parameter, linreg_method):
     di = di.set_id_column("ID")
     di = di.set_idv_column(
         data.columns.difference(["ID", "DV"]).tolist()[0]
-    )  # TODO: remove if use _bic
+    )
     base_model = base_model.replace(datainfo=di)
     base_model = convert_model(base_model, to_format="nonmem")
     return base_model
@@ -1076,31 +1085,45 @@ def _get_linreg_method(linreg_method, data, parameter):
 
 def _ofv(modelfit, nsamples, linreg_method="ols"):
     """Calculate OFV for different linear regression methods."""
-
     if linreg_method not in ["ols", "wls", "lme"]:
         raise ValueError(f"Unsupported regression method: {linreg_method}")
-
     scaling = 1 if linreg_method == "lme" else 1 / nsamples
-    ofv = -2 * modelfit.llf * scaling
-
-    return ofv
+    
+    if isinstance(modelfit, ResultsWrapper):
+        return -2 * modelfit.llf * scaling
+    elif isinstance(modelfit, ModelfitResults):
+        return modelfit.ofv * scaling
+    elif isinstance(modelfit, ModelEntry):
+        return modelfit.modelfit_results.ofv * scaling
+    else:
+        raise TypeError(f"Unsupported modelfit type: {type(modelfit)}")
 
 
 def _bic(modelfit, nsamples, linreg_method):
     """Calculate BICc for different linear regression methods."""
 
-    df = modelfit.df_modelwc if linreg_method == "lme" else modelfit.df_model + 1
-    bic = _ofv(modelfit, nsamples, linreg_method) + np.log(modelfit.nobs / nsamples) * df
-
-    return bic
+    if isinstance(modelfit, ResultsWrapper):
+        df = modelfit.df_modelwc if linreg_method == "lme" else modelfit.df_model + 1
+        return _ofv(modelfit, nsamples, linreg_method) + np.log(modelfit.nobs / nsamples) * df
+    elif isinstance(modelfit, ModelEntry):
+        return calculate_bic(modelfit.model, _ofv(modelfit.modelfit_results, nsamples, linreg_method), "random")
+    else:
+        return TypeError(f"Unsupported modelfit type: {type(modelfit)}")
 
 
 def _lrt(parent, child, nsamples, linreg_method):
     """Perform LRT for different linear regression methods."""
 
-    df_key = "df_modelwc" if linreg_method == "lme" else "df_model"
-    lrt_dofv = _ofv(parent, nsamples, linreg_method) - _ofv(child, nsamples, linreg_method)
-    lrt_df = getattr(child, df_key) - getattr(parent, df_key)
+    if isinstance(parent, ResultsWrapper):
+        df_key = "df_modelwc" if linreg_method == "lme" else "df_model"
+        lrt_dofv = _ofv(parent, nsamples, linreg_method) - _ofv(child, nsamples, linreg_method)
+        lrt_df = getattr(child, df_key) - getattr(parent, df_key)
+    elif isinstance(parent, ModelEntry):
+        lrt_df = len(child.model.parameters) - len(parent.model.parameters)
+        lrt_dofv = _ofv(parent.modelfit_results, nsamples, linreg_method) - _ofv(child.modelfit_results, nsamples, linreg_method)
+    else:
+        raise TypeError(f"Unsupported modelfit type: {type(parent)}")
+    
     lrt_pval = stats.chi2.sf(lrt_dofv, lrt_df)
 
     return lrt_dofv, lrt_pval
