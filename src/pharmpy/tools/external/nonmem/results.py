@@ -73,6 +73,7 @@ def _parse_modelfit_results(
         ses,
         ses_sdcorr,
         cov_abort,
+        ext_grd,
     ) = _parse_ext(control_stream, name_map, ext_tables, subproblem, parameters)
 
     table_df = _parse_tables(
@@ -85,6 +86,9 @@ def _parse_modelfit_results(
     gradients_iterations, final_zero_gradient, gradients = _parse_grd(
         path, control_stream, name_map, parameters, subproblem
     )
+    if gradients is None and ext_grd is not None:
+        gradients = ext_grd
+
     rse = _calculate_relative_standard_errors(final_pe, ses)
     (
         runtime_total,
@@ -632,6 +636,10 @@ def _parse_ext(
     ses, ses_sdcorr, cov_abort = _parse_standard_errors(
         control_stream, name_map, ext_tables, parameters, final_pe
     )
+
+    ext_grd = _parse_ext_grd(
+        control_stream, name_map, ext_tables, parameters)
+
     return (
         table_numbers,
         final_ofv,
@@ -642,6 +650,7 @@ def _parse_ext(
         ses,
         ses_sdcorr,
         cov_abort,
+        ext_grd,
     )
 
 
@@ -794,6 +803,25 @@ def _parse_standard_errors(
         sdcorr_ses = sdcorr_ses.rename(index=name_map)
     return ses, sdcorr_ses, cov_abort
 
+
+def _parse_ext_grd(
+        control_stream: NMTranControlStream,
+        name_map,
+        ext_tables: NONMEMTableFile,
+        parameters: Parameters,
+):
+    """parse gradients from ext file's line -1000000008"""
+    table = ext_tables.tables[-1]
+    assert isinstance(table, ExtTable)
+
+    grd = table.gradients # -> pd.Series
+    if grd is None:
+        return None
+
+    fix = _get_fixed_parameters(table, parameters, name_map)
+    grd = grd[~fix]
+    grd = grd.rename(index=name_map)
+    return grd
 
 def _parse_evaluation(execution_steps: ExecutionSteps):
     index = list(range(1, len(execution_steps) + 1))

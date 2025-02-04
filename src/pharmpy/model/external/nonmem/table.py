@@ -341,6 +341,14 @@ class ExtTable(NONMEMTable):
         return fix.apply(bool)
 
     @property
+    def gradients(self):
+        try:
+            grd =  self._get_parameters(-1000000008)
+        except KeyError:
+            grd = None
+        return grd
+
+    @property
     def final_ofv(self):
         try:
             ser = self._get_ofv(-1000000000)
