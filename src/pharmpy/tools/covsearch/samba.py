@@ -107,7 +107,7 @@ class LRTRes:
     lrt_pval: float
 
 
-NAME_WF = 'covsearch'
+NAME_WF = "covsearch"
 
 
 def samba_workflow(
@@ -118,11 +118,11 @@ def samba_workflow(
     p_forward: float = 0.05,
     p_backward: float = 0.01,
     max_eval: bool = False,
-    algorithm: Literal['samba', 'samba-foce', 'scm-lcs'] = 'samba',
+    algorithm: Literal["samba", "samba-foce", "scm-lcs"] = "samba",
     nsamples: int = 10,
     max_covariates: Optional[int] = 3,
-    selection_criterion: Literal['bic', 'lrt'] = 'bic',
-    linreg_method: Literal['ols', 'wls', 'lme'] = 'ols',
+    selection_criterion: Literal["bic", "lrt"] = "bic",
+    linreg_method: Literal["ols", "wls", "lme"] = "ols",
     stepwise_lcs: Optional[bool] = None,
     nonmem_lcs: bool = True,
     strictness: str = "minimization_successful or (rounding_errors and sigdigs>=0.1)",
@@ -218,7 +218,7 @@ def samba_forward(
             nonmem_lcs,
         )
         # nonlinear selection
-        if algorithm.startswith('samba') or stepwise_lcs:
+        if algorithm.startswith("samba") or stepwise_lcs:
             search_state = samba_nonlinear_model_selection(
                 context, step, selection_criterion, lrt_alpha, state_and_effect
             )
@@ -230,7 +230,9 @@ def samba_forward(
             break
         else:
             state_and_effect = replace(
-                state_and_effect, effect_funcs=ini_effect_funcs, search_state=search_state
+                state_and_effect,
+                effect_funcs=ini_effect_funcs,
+                search_state=search_state,
             )
 
     return search_state
@@ -266,18 +268,18 @@ def samba_effect_funcs_and_start_model(search_space, model):
                 filtered_model = remove_covariate_effect(
                     filtered_model, cov_effect[0], cov_effect[1]
                 )
-                description.append(f'rm({cov_effect[0]}-{cov_effect[1]}-{cov_effect[2]})')
+                description.append(f"rm({cov_effect[0]}-{cov_effect[1]}-{cov_effect[2]})")
 
     covariate_to_keep = covariate_to_keep.mfl_statement_list(["covariate"])
     for cov_effect in parse_spec(spec(filtered_model, covariate_to_keep)):
         if cov_effect[2].lower == "custom":
             filtered_model = remove_covariate_effect(filtered_model, cov_effect[0], cov_effect[1])
-            description.append(f'rm({cov_effect[0]}-{cov_effect[1]}-{cov_effect[2]})')
+            description.append(f"rm({cov_effect[0]}-{cov_effect[1]}-{cov_effect[2]})")
 
     if structural_cov_funcs:
         for cov_effect, cov_func in structural_cov_funcs.items():
             filtered_model = cov_func(filtered_model)
-            description.append(f'str({cov_effect[0]}-{cov_effect[1]}-{cov_effect[2]})')
+            description.append(f"str({cov_effect[0]}-{cov_effect[1]}-{cov_effect[2]})")
     if description:
         filtered_model = filtered_model.replace(description="start;" + ";".join(description))
 
@@ -290,9 +292,9 @@ def _prepare_mfls(model, search_space):
     ss_mfl = search_space.expand(model)
     model_mfl = ModelFeatures.create_from_mfl_string(get_model_features(model))
 
-    ss_mfl = ModelFeatures.create_from_mfl_statement_list(ss_mfl.mfl_statement_list(['covariate']))
+    ss_mfl = ModelFeatures.create_from_mfl_statement_list(ss_mfl.mfl_statement_list(["covariate"]))
     model_mfl = ModelFeatures.create_from_mfl_statement_list(
-        model_mfl.mfl_statement_list(['covariate'])
+        model_mfl.mfl_statement_list(["covariate"])
     )
     return model_mfl, ss_mfl
 
@@ -1086,7 +1088,7 @@ def _get_linreg_method(linreg_method, data, parameter):
     return lin_func
 
 
-def _ofv(modelfit, nsamples, linreg_method="ols"):
+def _ofv(modelfit, nsamples, linreg_method="ols") -> float:
     """Calculate OFV for different linear regression methods."""
     if linreg_method not in ["ols", "wls", "lme"]:
         raise ValueError(f"Unsupported regression method: {linreg_method}")
@@ -1102,7 +1104,7 @@ def _ofv(modelfit, nsamples, linreg_method="ols"):
         raise TypeError(f"Unsupported modelfit type: {type(modelfit)}")
 
 
-def _bic(modelfit, nsamples, linreg_method):
+def _bic(modelfit, nsamples, linreg_method) -> float:
     """
     Calculate BICc for different linear regression methods.
     BIC = -2LL + n_estimated_parameters * log(n_individuals)
@@ -1113,10 +1115,12 @@ def _bic(modelfit, nsamples, linreg_method):
         return _ofv(modelfit, nsamples, linreg_method) + np.log(modelfit.nobs / nsamples) * df
     elif isinstance(modelfit, ModelEntry):
         return calculate_bic(
-            modelfit.model, _ofv(modelfit.modelfit_results, nsamples, linreg_method), "random"
+            modelfit.model,
+            _ofv(modelfit.modelfit_results, nsamples, linreg_method),
+            "random",
         )
     else:
-        return TypeError(f"Unsupported modelfit type: {type(modelfit)}")
+        raise TypeError(f"Unsupported modelfit type: {type(modelfit)}")
 
 
 def _lrt(parent, child, nsamples, linreg_method):
@@ -1134,7 +1138,7 @@ def _lrt(parent, child, nsamples, linreg_method):
     else:
         raise TypeError(f"Unsupported modelfit type: {type(parent)}")
 
-    lrt_pval = stats.chi2.sf(lrt_dofv, lrt_df)
+    lrt_pval = stats.chi2.sf(lrt_dofv, lrt_df)[0]
 
     return lrt_dofv, lrt_pval
 
@@ -1183,7 +1187,10 @@ def samba_nonlinear_model_selection(
     context, step, selection_criterion, lrt_alpha, state_and_effect
 ):
     # unpack state_and_effect
-    search_state, effect_funcs = state_and_effect.search_state, state_and_effect.effect_funcs
+    search_state, effect_funcs = (
+        state_and_effect.search_state,
+        state_and_effect.effect_funcs,
+    )
     best_candidate = search_state.best_candidate_so_far
     best_model = best_candidate.modelentry.model
     best_bic = calculate_bic(
@@ -1330,7 +1337,11 @@ def _nonlinear_step_lrt(parent, child):
     lrt_pval = stats.chi2.sf(lrt_dofv, df)
 
     return LRTRes(
-        df=df, parent_ofv=parent_ofv, child_ofv=child_ofv, dofv=lrt_dofv, lrt_pval=lrt_pval
+        df=df,
+        parent_ofv=parent_ofv,
+        child_ofv=child_ofv,
+        dofv=lrt_dofv,
+        lrt_pval=lrt_pval,
     )
 
 
@@ -1391,11 +1402,11 @@ def samba_task_results(
         summary_models=tables["summary_models"],
         summary_tool=tables["summary_tool"],
         summary_errors=tables["summary_errors"],
-        final_model_dv_vs_ipred_plot=plots['dv_vs_ipred'],
-        final_model_dv_vs_pred_plot=plots['dv_vs_pred'],
-        final_model_cwres_vs_idv_plot=plots['cwres_vs_idv'],
-        final_model_abs_cwres_vs_ipred_plot=plots['abs_cwres_vs_ipred'],
-        final_model_eta_distribution_plot=plots['eta_distribution'],
+        final_model_dv_vs_ipred_plot=plots["dv_vs_ipred"],
+        final_model_dv_vs_pred_plot=plots["dv_vs_pred"],
+        final_model_cwres_vs_idv_plot=plots["cwres_vs_idv"],
+        final_model_abs_cwres_vs_ipred_plot=plots["abs_cwres_vs_ipred"],
+        final_model_eta_distribution_plot=plots["eta_distribution"],
         final_model_eta_shrinkage=table_final_eta_shrinkage(
             best_modelentry.model, best_modelentry.modelfit_results
         ),
@@ -1490,16 +1501,16 @@ def _make_lcs_table(lcs_results: list[pd.DataFrame], lrt_alpha):
 
 
 def _modify_summary_tool(summary_tool, steps):
-    step_cols_to_keep = ['step', 'lrt_pval', 'goal_pval', 'selected', 'model']
+    step_cols_to_keep = ["step", "lrt_pval", "goal_pval", "selected", "model"]
     summary_tool = (
-        steps[step_cols_to_keep].merge(summary_tool, on='model').set_index(['step', 'model'])
+        steps[step_cols_to_keep].merge(summary_tool, on="model").set_index(["step", "model"])
     )
 
-    column_to_move = summary_tool.pop('description')
-    summary_tool.insert(0, 'description', column_to_move)
+    column_to_move = summary_tool.pop("description")
+    summary_tool.insert(0, "description", column_to_move)
 
-    column_to_move = summary_tool.pop('parent_model')
-    summary_tool.insert(len(summary_tool.columns), 'parent_model', column_to_move)
+    column_to_move = summary_tool.pop("parent_model")
+    summary_tool.insert(len(summary_tool.columns), "parent_model", column_to_move)
 
     return summary_tool
 
@@ -1570,17 +1581,17 @@ def _make_samba_step_row(modelentries_dict, children_count, best_model, candidat
 
     selected = children_count[model.name] >= 1 or model.name == best_model.name
     return {
-        'step': step,
-        'covariate_effects': effects,
-        'reduced_ofv': reduced_ofv,
-        'extended_ofv': extended_ofv,
-        'dofv': dofv,
-        'lrt_pval': lrt_pval,
-        'goal_pval': alpha,
-        'lrt_significant': lrt_significant,
-        'reduced_bic': reduced_bic,
-        'extended_bic': extended_bic,
-        'dbic': dbic,
-        'selected': selected,
-        'model': model.name,
+        "step": step,
+        "covariate_effects": effects,
+        "reduced_ofv": reduced_ofv,
+        "extended_ofv": extended_ofv,
+        "dofv": dofv,
+        "lrt_pval": lrt_pval,
+        "goal_pval": alpha,
+        "lrt_significant": lrt_significant,
+        "reduced_bic": reduced_bic,
+        "extended_bic": extended_bic,
+        "dbic": dbic,
+        "selected": selected,
+        "model": model.name,
     }

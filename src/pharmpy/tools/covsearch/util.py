@@ -63,7 +63,7 @@ class LinStateAndEffect(StateAndEffect):
     param_cov_list: dict
 
 
-def store_input_model(context, model, results, max_eval):
+def store_input_model(context, model, results, max_eval=False):
     """Store the input model"""
     context.log_info("Starting tool covsearch")
     model = model.replace(name="input", description="input")
@@ -105,13 +105,13 @@ def filter_search_space_and_model(search_space, model):
     if len(covariate_to_remove) != 0:
         for cov_effect in parse_spec(spec(filtered_model, covariate_to_remove)):
             filtered_model = remove_covariate_effect(filtered_model, cov_effect[0], cov_effect[1])
-            description.append(f'({cov_effect[0]}-{cov_effect[1]}-{cov_effect[2]})')
+            description.append(f"({cov_effect[0]}-{cov_effect[1]}-{cov_effect[2]})")
 
     covariate_to_keep = covariate_to_keep.mfl_statement_list(["covariate"])
     for cov_effect in parse_spec(spec(filtered_model, covariate_to_keep)):
         if cov_effect[2].lower() == "custom":
             filtered_model = remove_covariate_effect(filtered_model, cov_effect[0], cov_effect[1])
-            description.append(f'({cov_effect[0]}-{cov_effect[1]}-{cov_effect[2]})')
+            description.append(f"({cov_effect[0]}-{cov_effect[1]}-{cov_effect[2]})")
 
     structural_cov = tuple(c for c in ss_mfl.covariate if not c.optional.option)
     structural_cov_funcs = all_funcs(Model(), structural_cov)
@@ -119,7 +119,7 @@ def filter_search_space_and_model(search_space, model):
         description.append("ADD_STRUCT")
         for cov_effect, cov_func in structural_cov_funcs.items():
             filtered_model = cov_func(filtered_model)
-            description.append(f'({cov_effect[0]}-{cov_effect[1]}-{cov_effect[2]})')
+            description.append(f"({cov_effect[0]}-{cov_effect[1]}-{cov_effect[2]})")
     description.append("ADD_EXPLOR")
     filtered_model = filtered_model.replace(description="input;" + ";".join(description))
 
@@ -134,7 +134,6 @@ def filter_search_space_and_model(search_space, model):
 
 
 def init_nonlinear_search_state(context, input_modelentry, filtered_model, algorithm, nsamples):
-
     if "samba" in algorithm:
         filtered_model = set_samba_estimation(filtered_model, algorithm, nsamples)
 
@@ -146,14 +145,14 @@ def init_nonlinear_search_state(context, input_modelentry, filtered_model, algor
             idx=0,
             interaction=True,
             auto=True,
-            tool_options={'PHITYPE': "1", 'FNLETA': "0"},
+            tool_options={"PHITYPE": "1", "FNLETA": "0"},
         )
 
     # nonlinear mixed effect modelentry creation and fit
     if filtered_model != input_modelentry.model:
         filtered_modelentry = ModelEntry.create(model=filtered_model)
         filtered_fit_wf = create_fit_workflow(modelentries=[filtered_modelentry])
-        filtered_modelentry = context.call_workflow(filtered_fit_wf, 'fit_filtered_model')
+        filtered_modelentry = context.call_workflow(filtered_fit_wf, "fit_filtered_model")
     else:
         filtered_modelentry = input_modelentry
 
@@ -171,7 +170,7 @@ def set_samba_estimation(filtered_model, algorithm, nsamples):
             idx=0,
             interaction=True,
             auto=True,
-            tool_options={'PHITYPE': "1", 'FNLETA': "0"},
+            tool_options={"PHITYPE": "1", "FNLETA": "0"},
         )
     else:
         filtered_model = mu_reference_model(filtered_model)
@@ -193,7 +192,7 @@ def set_samba_estimation(filtered_model, algorithm, nsamples):
             niter=200,
             isample=10,
             keep_every_nth_iter=50,
-            tool_options={'PHITYPE': "1", 'FNLETA': "0"},
+            tool_options={"PHITYPE": "1", "FNLETA": "0"},
         )
     # estimation method 2 for individual parameters
     if nsamples > 0:
@@ -201,7 +200,7 @@ def set_samba_estimation(filtered_model, algorithm, nsamples):
             filtered_model,
             method="SAEM",
             idx=2,
-            niter=0 if 'saem' in algorithm else 10,
+            niter=0 if "saem" in algorithm else 10,
             isample=nsamples,
             tool_options={
                 "EONLY": "1",

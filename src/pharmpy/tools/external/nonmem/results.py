@@ -637,8 +637,7 @@ def _parse_ext(
         control_stream, name_map, ext_tables, parameters, final_pe
     )
 
-    ext_grd = _parse_ext_grd(
-        control_stream, name_map, ext_tables, parameters)
+    ext_grd = _parse_ext_grd(control_stream, name_map, ext_tables, parameters)
 
     return (
         table_numbers,
@@ -805,16 +804,16 @@ def _parse_standard_errors(
 
 
 def _parse_ext_grd(
-        control_stream: NMTranControlStream,
-        name_map,
-        ext_tables: NONMEMTableFile,
-        parameters: Parameters,
+    control_stream: NMTranControlStream,
+    name_map,
+    ext_tables: NONMEMTableFile,
+    parameters: Parameters,
 ):
     """parse gradients from ext file's line -1000000008"""
     table = ext_tables.tables[-1]
     assert isinstance(table, ExtTable)
 
-    grd = table.gradients # -> pd.Series
+    grd = table.gradients  # -> pd.Series
     if grd is None:
         return None
 
@@ -822,6 +821,7 @@ def _parse_ext_grd(
     grd = grd[~fix]
     grd = grd.rename(index=name_map)
     return grd
+
 
 def _parse_evaluation(execution_steps: ExecutionSteps):
     index = list(range(1, len(execution_steps) + 1))

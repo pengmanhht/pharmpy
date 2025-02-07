@@ -343,7 +343,7 @@ class ExtTable(NONMEMTable):
     @property
     def gradients(self):
         try:
-            grd =  self._get_parameters(-1000000008)
+            grd = self._get_parameters(-1000000008)
         except KeyError:
             grd = None
         return grd
