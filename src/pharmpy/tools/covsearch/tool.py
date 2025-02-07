@@ -21,6 +21,7 @@ from pharmpy.tools.common import (
     update_initial_estimates,
 )
 from pharmpy.tools.covsearch.samba import samba_workflow
+from pharmpy.tools.covsearch.wam import wam_workflow
 from pharmpy.tools.mfl.feature.covariate import EffectLiteral
 from pharmpy.tools.mfl.feature.covariate import features as covariate_features
 from pharmpy.tools.mfl.feature.covariate import parse_spec, spec
@@ -127,13 +128,12 @@ def create_workflow(
     p_backward: float = 0.001,
     max_steps: int = -1,
     algorithm: Literal[
-        'scm-forward', 'scm-forward-then-backward', 'samba', 'samba-foce', 'scm-lcs'
-    ] = 'scm-forward-then-backward',
         "scm-forward",
         "scm-forward-then-backward",
         "samba",
         "samba-foce",
         "scm-lcs",
+        "wam",
     ] = "scm-forward-then-backward",
     max_eval: bool = False,
     adaptive_scope_reduction: bool = False,
@@ -208,6 +208,15 @@ def create_workflow(
     >>> search_space = 'COVARIATE([CL, V], [AGE, WT], EXP)'
     >>> res = run_covsearch(model=model, results=results, search_space=search_space)      # doctest: +SKIP
     """
+    if algorithm == "wam":
+        return wam_workflow(
+            model=model,
+            results=results,
+            search_space=search_space,
+            p_backward=p_backward,
+            rank=3,
+            strictness=strictness,
+        )
     if algorithm in ["samba", "samba-foce", "scm-lcs"]:
         return samba_workflow(
             model=model,
