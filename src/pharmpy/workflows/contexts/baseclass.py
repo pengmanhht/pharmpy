@@ -4,11 +4,11 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any, Literal, Optional, Union
 
-import pharmpy.workflows.contexts.broadcasters.null
 from pharmpy.deps import numpy as np
 from pharmpy.deps import pandas as pd
 from pharmpy.model import Model
-from pharmpy.workflows.contexts.broadcasters.terminal import broadcast_message
+from pharmpy.workflows.broadcasters import Broadcaster
+from pharmpy.workflows.dispatchers import Dispatcher
 from pharmpy.workflows.hashing import ModelHash
 from pharmpy.workflows.model_database import ModelDatabase
 from pharmpy.workflows.model_entry import ModelEntry
@@ -35,18 +35,12 @@ class Context(ABC):
         self,
         name: str,
         ref: Optional[str] = None,
-        common_options: dict[str, Any] = None,
-        broadcaster: Optional[str] = None,
     ):
         # If the context already exists it will be opened
         # otherwise a new top level context will be created
         # An implementation needs to create the model database here
         # If ref is None an implementation specific default ref will be used
         self._name = name
-        if broadcaster is not None and broadcaster.lower() == 'null':
-            self.broadcast_message = pharmpy.workflows.contexts.broadcasters.null.broadcast_message
-        else:
-            self.broadcast_message = broadcast_message
 
     @abstractmethod
     def __repr__(self) -> str:
@@ -56,6 +50,38 @@ class Context(ABC):
     def model_database(self) -> ModelDatabase:
         """ModelDatabase to store results of models run in context"""
         return self._model_database
+
+    @property
+    def broadcaster(self) -> Broadcaster:
+        if not hasattr(self, '_broadcaster'):
+            metadata = self.retrieve_metadata()
+            if (
+                'dispatching_options' in metadata
+                and 'broadcaster' in metadata['dispatching_options']
+            ):
+                name = metadata['dispatching_options']['broadcaster']
+            else:
+                from pharmpy import conf
+
+                name = conf.broadcaster
+            self._broadcaster = Broadcaster.select_broadcaster(name)
+        return self._broadcaster
+
+    @property
+    def dispatcher(self) -> Dispatcher:
+        if not hasattr(self, '_dispatcher'):
+            metadata = self.retrieve_metadata()
+            if (
+                'dispatching_options' in metadata
+                and 'dispatcher' in metadata['dispatching_options']
+            ):
+                name = metadata['dispatching_options']['dispatcher']
+            else:
+                from pharmpy import conf
+
+                name = conf.dispatcher
+            self._dispatcher = Dispatcher.select_dispatcher(name)
+        return self._dispatcher
 
     @property
     @abstractmethod
@@ -152,13 +178,13 @@ class Context(ABC):
         model: Optional[Model] = None,
     ):
         """Add a message to the log"""
+        date = datetime.now()
         if model is None:
             ctxpath = self.context_path
         else:
             ctxpath = self.get_model_context_path(model)
-        date = datetime.now()
         self.store_message(severity, ctxpath, date, message)
-        self.broadcast_message(severity, ctxpath, date, message)
+        self.broadcaster.broadcast_message(severity, ctxpath, date, message)
 
     def log_info(self, message: str, model: Optional[Model] = None):
         """Add an info message to the log
@@ -236,6 +262,7 @@ class Context(ABC):
         self._store_model(INPUT_MODEL_NAME, me)
 
     def retrieve_input_model_entry(self) -> ModelEntry:
+        """Retrieve the ModelEntry of the model marked as input"""
         me = self._retrieve_me(INPUT_MODEL_NAME)
         return me
 
@@ -243,20 +270,19 @@ class Context(ABC):
         self._store_model(FINAL_MODEL_NAME, me)
 
     def retrieve_final_model_entry(self) -> ModelEntry:
-        model = self._retrieve_me(FINAL_MODEL_NAME)
-        return model
+        """Retrieve the ModelEntry of the model marked as final"""
+        me = self._retrieve_me(FINAL_MODEL_NAME)
+        return me
 
     def call_workflow(self, workflow, unique_name: str):
-        from pharmpy.workflows.dispatchers.local_dask import call_workflow
-
-        res = call_workflow(workflow, unique_name, self)
+        """Ask the dispatcher to call a subworkflow"""
+        res = self.dispatcher.call_workflow(workflow, unique_name, self)
         return res
 
     def abort_workflow(self, message):
+        """Ask the dispatcher to abort the currently running workflow directly"""
         self.log_message("critical", message)
-        from pharmpy.workflows.dispatchers.local_dask import abort_workflow
-
-        abort_workflow()
+        self.dispatcher.abort_workflow()
 
     def has_completed(self):
         """Check if the tool running in the context has completed"""

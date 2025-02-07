@@ -14,6 +14,30 @@ from pharmpy.internals.fs.cwd import chdir
 from pharmpy.internals.fs.tmp import TemporaryDirectory
 
 
+# This spoofer is needed to trick jupyter_client to turn off stdout and stderr
+# These can cause problems when running from rstudio on Windows
+# Does nothing on platforms other than Windows
+class SpoofExecutable:
+    def __enter__(self):
+        if os.name == 'nt' and self._check_rstudio():
+            import sys
+
+            self.executable = sys.executable
+            sys.executable = 'pythonw.exe'
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if os.name == 'nt' and self._check_rstudio():
+            import sys
+
+            sys.executable = self.executable
+
+    def _check_rstudio(self):
+        # rstudio is setting the environment variable RSTUDIO in the running process
+        # This gets inherited by child processes
+        rstudio = os.environ.get("RSTUDIO", None)
+        return rstudio == "1"
+
+
 def generate_report(rst_path, results_path, target_path):
     """Generate report from rst and results json"""
     results_path = Path(results_path)
@@ -69,16 +93,17 @@ def generate_report(rst_path, results_path, target_path):
                         "Parsing dates involving a day of month without",
                     )
 
-                    app = Sphinx(
-                        str(source_path),
-                        str(conf_path),
-                        str(tmp_path),
-                        str(tmp_path),
-                        "singlehtml",
-                        status=devnull,
-                        warning=devnull,
-                    )
-                    app.build()
+                    with SpoofExecutable():
+                        app = Sphinx(
+                            str(source_path),
+                            str(conf_path),
+                            str(tmp_path),
+                            str(tmp_path),
+                            "singlehtml",
+                            status=devnull,
+                            warning=devnull,
+                        )
+                        app.build()
 
         # Write missing altair css
         with open(tmp_path / '_static' / 'altair-plot.css', 'w') as dh:
@@ -115,7 +140,7 @@ def embed_css_and_js(html, target):
 
             soup = BeautifulSoup(sh, features='lxml')
 
-    scripts = soup.findAll("script", attrs={"src": True})
+    scripts = soup.find_all("script", attrs={"src": True})
 
     for script in scripts:
         source = script.attrs['src']
@@ -144,7 +169,7 @@ def embed_css_and_js(html, target):
         tag.append(content)
         script.replace_with(tag)
 
-    stylesheets = soup.findAll("link", attrs={"rel": "stylesheet"})
+    stylesheets = soup.find_all("link", attrs={"rel": "stylesheet"})
 
     for stylesheet in stylesheets:
         stylesheet_src = stylesheet.attrs['href']

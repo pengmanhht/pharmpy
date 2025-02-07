@@ -35,8 +35,6 @@ class LocalDirectoryContext(Context):
         self,
         name: str,
         ref: Optional[str] = None,
-        common_options: dict[str, Any] = None,
-        broadcaster: Optional[str] = None,
     ):
         if ref is None:
             ref = Path.cwd()
@@ -48,8 +46,7 @@ class LocalDirectoryContext(Context):
         self._init_annotations()
         self._init_model_name_map()
         self._init_log()
-        self._store_common_options(common_options)
-        super().__init__(name, ref, common_options, broadcaster=broadcaster)
+        super().__init__(name, ref)
 
     def __repr__(self) -> str:
         return f"<Local directory context at {self.path}>"
@@ -90,14 +87,6 @@ class LocalDirectoryContext(Context):
             with open(log_path, 'w') as fh:
                 fh.write("path,time,severity,message\n")
 
-    def _store_common_options(self, common_options):
-        if common_options is None:
-            common_options = {}
-        if self.path == self._top_path:
-            if not self._common_options_path.is_file():
-                with open(self._common_options_path, 'w') as f:
-                    json.dump(common_options, f, indent=4, cls=MetadataJSONEncoder)
-
     def _read_lock(self, path: Path):
         # NOTE: Obtain shared (blocking) lock on one file
         path = path.with_suffix('.lock')
@@ -133,7 +122,8 @@ class LocalDirectoryContext(Context):
 
     @property
     def _metadata_path(self) -> Path:
-        return self.path / 'metadata.json'
+        # Currently one metadata for nested context
+        return self._top_path / 'metadata.json'
 
     @property
     def _models_path(self) -> Path:
@@ -142,10 +132,6 @@ class LocalDirectoryContext(Context):
     @property
     def _annotations_path(self) -> Path:
         return self.path / 'annotations'
-
-    @property
-    def _common_options_path(self) -> Path:
-        return self._top_path / 'common_options'
 
     @property
     def context_path(self) -> str:
@@ -160,6 +146,8 @@ class LocalDirectoryContext(Context):
             json.dump(metadata, f, indent=4, cls=MetadataJSONEncoder)
 
     def retrieve_metadata(self) -> dict:
+        if not self._metadata_path.is_file():
+            return {}
         with open(self._metadata_path, 'r') as f:
             return json.load(f, cls=MetadataJSONDecoder)
 
@@ -254,8 +242,8 @@ class LocalDirectoryContext(Context):
         return df
 
     def retrieve_common_options(self) -> dict[str, Any]:
-        with open(self._common_options_path, 'r') as f:
-            return json.load(f, cls=MetadataJSONDecoder)
+        meta = self.retrieve_metadata()
+        return meta['common_options']
 
     def get_parent_context(self) -> LocalDirectoryContext:
         if self.path == self._top_path:
@@ -286,6 +274,8 @@ class MetadataJSONEncoder(json.JSONEncoder):
         elif isinstance(obj, ModelfitResults):
             return obj.to_json()
         elif isinstance(obj, ModelFeatures):
+            return str(obj)
+        elif isinstance(obj, Path):
             return str(obj)
         return super().default(obj)
 

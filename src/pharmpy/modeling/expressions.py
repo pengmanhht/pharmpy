@@ -8,8 +8,6 @@ from typing import Iterable, Literal, Optional, Sequence, TypeVar, Union
 from pharmpy.basic import Expr, TExpr, TSymbol
 from pharmpy.deps import networkx as nx
 from pharmpy.deps import sympy
-from pharmpy.internals.expr.assumptions import assume_all
-from pharmpy.internals.expr.leaves import free_images_and_symbols
 from pharmpy.internals.expr.subs import subs
 from pharmpy.internals.graph.directed.connected_components import strongly_connected_component_of
 from pharmpy.internals.graph.directed.inverse import inverse as graph_inverse
@@ -394,17 +392,19 @@ def has_mu_reference(model: Model) -> bool:
 
     """
     ind_index_assignments = list(_find_eta_assignments(model))
+    if not ind_index_assignments:
+        return False
     ind_parameters = [a[1].symbol for a in ind_index_assignments]
     mu_regex = re.compile(r'^mu_\d*$', re.IGNORECASE)
     for ind_param in ind_parameters:
-        ind_statement = model.statements.find_assignment(ind_param)
+        ind_statement = model.statements.get_assignment(ind_param)
         if not any(re.match(mu_regex, str(p)) for p in ind_statement.free_symbols):
             return False
 
     return True
 
 
-def get_mu_connected_to_parameter(model: Model, parameter: str) -> str:
+def get_mu_connected_to_parameter(model: Model, parameter: str) -> Optional[str]:
     """Return Mu name connected to parameter
 
     If the given parameter is not dependent on any Mu, None is returned
@@ -939,6 +939,8 @@ def _cut_partial_odes(model, g, dv):
         if isinstance(s, CompartmentalSystem):
             ode_index = i
             break
+    else:
+        assert False  # This should never happen
 
     g = g.copy()
     for i, s in enumerate(model.statements):
@@ -1916,8 +1918,7 @@ def is_real(model: Model, expr: TExpr) -> Optional[bool]:
     True
 
     """
-    expr = sympy.sympify(expr)
-    return sympy.ask(sympy.Q.real(expr), assume_all(sympy.Q.real, free_images_and_symbols(expr)))
+    return Expr(expr).is_real()
 
 
 def is_linearized(model: Model):

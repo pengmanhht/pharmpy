@@ -778,11 +778,7 @@ class CompartmentalSystem(Statement):
             return True
         if not isinstance(other, CompartmentalSystem):
             return NotImplemented
-        return (
-            self._t == other._t
-            and nx.to_dict_of_dicts(self._g) == nx.to_dict_of_dicts(other._g)
-            and self.dosing_compartments == other.dosing_compartments
-        )
+        return self._t == other._t and nx.to_dict_of_dicts(self._g) == nx.to_dict_of_dicts(other._g)
 
     def __hash__(self):
         return hash((self._t, self._g))
@@ -2059,6 +2055,26 @@ class Statements(Sequence, Immutable):
             symbols |= assignment.free_symbols
         return symbols
 
+    @property
+    def lhs_symbols(self) -> set[Expr]:
+        """Get set of all symbols defined in this Statements
+
+        Examples
+        --------
+        >>> from pharmpy.modeling import load_example_model
+        >>> model = load_example_model("pheno")
+        >>> model.statements.lhs_symbols   # doctest: +SKIP
+        {F, A_CENTRAL(t), TVV, CL, Y, VC, V, TVCL, S1}
+        """
+        symbs = set()
+        for s in self:
+            if isinstance(s, Assignment):
+                symbs.add(s.symbol)
+            else:
+                assert isinstance(s, CompartmentalSystem)
+                symbs |= set(s.amounts)
+        return symbs
+
     def _get_ode_system_index(self):
         return next(
             map(
@@ -2216,6 +2232,33 @@ class Statements(Sequence, Immutable):
         return self._lookup_last_assignment(symbol)[1]
 
     def get_assignment(self, symbol: TSymbol) -> Assignment:
+        """Returns last assignment of symbol
+
+        This method assumes that the assignment exists
+
+        Parameters
+        ----------
+        symbol : Symbol or str
+            Symbol to get
+
+        Returns
+        -------
+        Assignment
+            The Assignment
+
+        Examples
+        --------
+        >>> from pharmpy.modeling import load_example_model
+        >>> model = load_example_model("pheno")
+        >>> model.statements.get_assignment("CL")
+                   ETA_CL
+        CL = TVCL⋅ℯ
+
+        See Also
+        --------
+        find_assignment : Find assignment (allowing for the assigment to not exist)
+        """
+
         assignment = self.find_assignment(symbol)
         if assignment is None:
             raise ValueError(f"Assignment of {symbol} not found")

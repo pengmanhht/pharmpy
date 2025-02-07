@@ -9,7 +9,7 @@ from pharmpy.deps import pandas as pd
 from pharmpy.deps import sympy
 from pharmpy.deps.scipy import linalg
 from pharmpy.internals.expr.eval import eval_expr
-from pharmpy.model import Model
+from pharmpy.model import Model, get_and_check_dataset
 
 from .expressions import (
     calculate_epsilon_gradient_expression,
@@ -18,14 +18,15 @@ from .expressions import (
     get_population_prediction_expression,
 )
 
-ParameterMap = Mapping[Union[str, 'sympy.Symbol'], Union[float, 'sympy.Float']]
+ParameterMap = Mapping[Union[str], Union[float, 'sympy.Float']]
 
 
-class DataFrameMapping(Mapping['sympy.Symbol', 'np.ndarray']):
+class DataFrameMapping(Mapping['sympy.Expr', 'np.ndarray']):
     def __init__(self, df: pd.DataFrame):
         self._df = df
 
-    def __getitem__(self, symbol: sympy.Symbol):
+    def __getitem__(self, symbol: sympy.Expr):
+        assert isinstance(symbol, sympy.Symbol)
         return self._df[symbol.name].to_numpy()
 
     def __len__(self):
@@ -89,9 +90,9 @@ def evaluate_expression(
     mapping = inits if parameter_estimates is None else {**inits, **parameter_estimates}
     expr = full_expr.subs(mapping)
 
-    df = model.dataset
+    df = get_and_check_dataset(model)
 
-    array = eval_expr(expr, len(df), DataFrameMapping(df))
+    array = eval_expr(expr._sympy_(), len(df), DataFrameMapping(df))
     return pd.Series(array)
 
 
@@ -150,9 +151,9 @@ def evaluate_population_prediction(
     mapping = model.parameters.inits if parameters is None else parameters
     expr = y.subs(mapping)
 
-    df = model.dataset if dataset is None else dataset
+    df = get_and_check_dataset(model) if dataset is None else dataset
 
-    pred = eval_expr(expr, len(df), DataFrameMapping(df))
+    pred = eval_expr(sympy.sympify(expr), len(df), DataFrameMapping(df))
     return pd.Series(pred, name='PRED')
 
 
@@ -219,7 +220,7 @@ def evaluate_individual_prediction(
     mapping = model.parameters.inits if parameters is None else parameters
     y = y.subs(mapping)
 
-    df = model.dataset if dataset is None else dataset
+    df = get_and_check_dataset(model) if dataset is None else dataset
 
     idcol = model.datainfo.id_column.name
 
@@ -227,7 +228,7 @@ def evaluate_individual_prediction(
         pd.DataFrame(
             0,
             index=df[idcol].unique(),
-            columns=model.random_variables.etas.names,
+            columns=pd.Index(model.random_variables.etas.names),
         )
         if etas is None
         else etas
@@ -235,7 +236,7 @@ def evaluate_individual_prediction(
 
     _df = df.join(_etas, on=idcol)
 
-    ipred = eval_expr(y, len(_df), DataFrameMapping(_df))
+    ipred = eval_expr(sympy.sympify(y), len(_df), DataFrameMapping(_df))
     return pd.Series(ipred, name='IPRED')
 
 
@@ -308,7 +309,7 @@ def evaluate_eta_gradient(
     y = calculate_eta_gradient_expression(model)
     y = _replace_parameters(model, y, parameters)
 
-    df = model.dataset if dataset is None else dataset
+    df = get_and_check_dataset(model) if dataset is None else dataset
     idcol = model.datainfo.id_column.name
 
     if etas is not None:
@@ -319,7 +320,7 @@ def evaluate_eta_gradient(
         _etas = pd.DataFrame(
             0,
             index=df[idcol].unique(),
-            columns=model.random_variables.etas.names,
+            columns=pd.Index(model.random_variables.etas.names),
         )
 
     derivative_names = [f'dF/d{eta}' for eta in model.random_variables.etas.names]
@@ -328,7 +329,7 @@ def evaluate_eta_gradient(
 
     return pd.DataFrame(
         {
-            name: eval_expr(expr, len(_df), DataFrameMapping(_df))
+            name: eval_expr(sympy.sympify(expr), len(_df), DataFrameMapping(_df))
             for expr, name in zip(y, derivative_names)
         }
     )
@@ -401,7 +402,7 @@ def evaluate_epsilon_gradient(
     repl = {Expr.symbol(eps): 0 for eps in eps_names}
     y = [x.subs(repl) for x in y]
 
-    df = model.dataset if dataset is None else dataset
+    df = get_and_check_dataset(model) if dataset is None else dataset
 
     idcol = model.datainfo.id_column.name
 
@@ -413,7 +414,7 @@ def evaluate_epsilon_gradient(
         _etas = pd.DataFrame(
             0,
             index=df[idcol].unique(),
-            columns=model.random_variables.etas.names,
+            columns=pd.Index(model.random_variables.etas.names),
         )
 
     _df = df.join(_etas, on=idcol)
@@ -421,7 +422,7 @@ def evaluate_epsilon_gradient(
 
     return pd.DataFrame(
         {
-            name: eval_expr(expr, len(_df), DataFrameMapping(_df))
+            name: eval_expr(sympy.sympify(expr), len(_df), DataFrameMapping(_df))
             for expr, name in zip(y, derivative_names)
         }
     )
@@ -479,31 +480,32 @@ def evaluate_weighted_residuals(
 
     omega = model.random_variables.etas.covariance_matrix
     sigma = model.random_variables.epsilons.covariance_matrix
-    parameters = model.parameters.inits if parameters is None else parameters
-    omega = omega.subs(parameters)
-    sigma = sigma.subs(parameters)
+    useparams = model.parameters.inits if parameters is None else parameters
+    omega = omega.subs(useparams)
+    sigma = sigma.subs(useparams)
     omega = omega.to_numpy()
     sigma = sigma.to_numpy()
-    df = model.dataset if dataset is None else dataset
+    df = get_and_check_dataset(model) if dataset is None else dataset
     # FIXME: Could have option to gradients to set all etas 0
     etas = pd.DataFrame(
         0,
         index=df[model.datainfo.id_column.name].unique(),
-        columns=model.random_variables.etas.names,
+        columns=pd.Index(model.random_variables.etas.names),
     )
-    G = evaluate_eta_gradient(model, etas=etas, parameters=parameters, dataset=dataset)
-    H = evaluate_epsilon_gradient(model, etas=etas, parameters=parameters, dataset=dataset)
+    G = evaluate_eta_gradient(model, etas=etas, parameters=useparams, dataset=dataset)
+    H = evaluate_epsilon_gradient(model, etas=etas, parameters=useparams, dataset=dataset)
     F = evaluate_population_prediction(model)
     index = df[model.datainfo.id_column.name]
-    G.index = index
-    H.index = index
-    F.index = index
-    WRES = np.float64([])
+    G.set_index(index, inplace=True)
+    H.set_index(index, inplace=True)
+    F.index = pd.Index(index)
+    WRES = np.empty(0)
     for i in df[model.datainfo.id_column.name].unique():
         Gi = np.float64(G.loc[[i]])
         Hi = np.float64(H.loc[[i]])
         Fi = F.loc[i:i]
-        DVi = (df['DV'][df[model.datainfo.id_column.name] == i]).astype(np.float64).values
+        DVi_df = (df['DV'][df[model.datainfo.id_column.name] == i]).astype(np.float64)
+        DVi = DVi_df.values  # pyright: ignore [reportAttributeAccessIssue]
         Ci = Gi @ omega @ Gi.T + np.diag(np.diag(Hi @ sigma @ Hi.T))
         WRESi = linalg.sqrtm(linalg.inv(Ci)) @ (DVi - Fi)
         WRES = np.concatenate((WRES, WRESi))

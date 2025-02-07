@@ -164,12 +164,37 @@ def test_set_initial_estimates_move_est(load_model_for_test, pheno_path):
     param_est = res.parameter_estimates.copy()
     param_est['IIV_CL_IIV_V'] = 0.0285  # Correlation > 0.99
     param_est['IIV_S1'] = 0.0005
+    model1 = set_initial_estimates(model, param_est, move_est_close_to_bounds=True)
 
-    model = set_initial_estimates(model, param_est, move_est_close_to_bounds=True)
+    assert model1.parameters['IVCL'].init == param_est['IVCL']
+    assert model1.parameters['IIV_S1'].init == 0.01
+    assert round(model1.parameters['IIV_CL_IIV_V'].init, 6) == 0.025757
 
-    assert model.parameters['IVCL'].init == param_est['IVCL']
-    assert model.parameters['IIV_S1'].init == 0.01
-    assert round(model.parameters['IIV_CL_IIV_V'].init, 6) == 0.025757
+    param_est['IIV_CL_IIV_V'] = -0.3  # Correlation < -0.99
+
+    model2 = set_initial_estimates(model, param_est, move_est_close_to_bounds=True)
+    assert model2.parameters['IVCL'].init == param_est['IVCL']
+    assert round(model2.parameters['IIV_CL_IIV_V'].init, 6) == -0.025757
+
+    model3 = set_upper_bounds(model, {'THETA_3': 1})
+
+    param_est['THETA_3'] = -0.99
+
+    model4 = set_initial_estimates(model3, param_est, move_est_close_to_bounds=True)
+    assert model4.parameters['IVCL'].init == param_est['IVCL']
+    assert model4.parameters['THETA_3'].init == -0.9405
+
+    param_est['THETA_3'] = 0.99
+
+    model4 = set_initial_estimates(model3, param_est, move_est_close_to_bounds=True)
+    assert model4.parameters['IVCL'].init == param_est['IVCL']
+    assert model4.parameters['THETA_3'].init == 0.95
+
+    model5 = set_upper_bounds(model3, {'THETA_3': 0.1})
+    model5 = set_lower_bounds(model5, {'THETA_3': 0.09})
+    param_est['THETA_3'] = 0.099
+    model5 = set_initial_estimates(model5, param_est, move_est_close_to_bounds=True)
+    assert model5.parameters['THETA_3'].init == 0.095
 
 
 def test_set_initial_estimates_zero_fix(load_model_for_test, pheno_path):

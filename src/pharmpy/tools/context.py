@@ -3,8 +3,8 @@ from typing import Union
 
 from pharmpy.internals.fs.path import normalize_user_given_path
 from pharmpy.workflows import ModelfitResults
+from pharmpy.workflows.broadcasters import Broadcaster
 from pharmpy.workflows.contexts import Context, LocalDirectoryContext
-from pharmpy.workflows.contexts.broadcasters.terminal import broadcast_message
 
 
 def _open_context(source):
@@ -50,9 +50,10 @@ def print_log(context: Context):
         Print the log of this context
 
     """
+    broadcaster = Broadcaster.select_broadcaster("terminal")
     df = context.retrieve_log()
     for _, row in df.iterrows():
-        broadcast_message(row['severity'], row['path'], row['time'], row['message'])
+        broadcaster.broadcast_message(row['severity'], row['path'], row['time'], row['message'])
 
 
 def retrieve_modelfit_results(

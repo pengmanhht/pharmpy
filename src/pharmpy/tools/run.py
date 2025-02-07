@@ -38,6 +38,7 @@ from pharmpy.tools.mfl.statement.feature.transits import Transits
 from pharmpy.tools.psn_helpers import create_results as psn_create_results
 from pharmpy.workflows import Results, Workflow, execute_workflow, split_common_options
 from pharmpy.workflows.contexts import Context, LocalDirectoryContext
+from pharmpy.workflows.dispatchers import Dispatcher
 from pharmpy.workflows.model_database import ModelDatabase
 from pharmpy.workflows.model_entry import ModelEntry
 from pharmpy.workflows.results import ModelfitResults, mfr
@@ -204,12 +205,12 @@ def run_tool_with_name(
 
     tool_metadata = create_metadata(
         database=ctx,
-        dispatcher=dispatcher,
         tool_name=name,
         tool_func=create_workflow,
         args=args,
         tool_options=tool_options,
         common_options=common_options,
+        dispatching_options=dispatching_options,
     )
 
     ctx.store_metadata(tool_metadata)
@@ -252,16 +253,17 @@ def run_tool_with_name(
 
 def create_metadata(
     database: Context,
-    dispatcher,
     tool_name: str,
     tool_func,
     args: Sequence,
     tool_options: Mapping[str, Any],
     common_options: Mapping[str, Any],
+    dispatching_options: Mapping[str, Any],
 ):
     tool_metadata = _create_metadata_tool(database, tool_name, tool_func, args, tool_options)
-    setup_metadata = _create_metadata_common(database, dispatcher, tool_name, common_options)
+    setup_metadata = _create_metadata_common(database, tool_name, common_options)
     tool_metadata['common_options'] = setup_metadata
+    tool_metadata['dispatching_options'] = dispatching_options
 
     return tool_metadata
 
@@ -425,10 +427,9 @@ def _create_metadata_tool(
 
 
 def _create_metadata_common(
-    database: Context, dispatcher, toolname: Optional[str], common_options: Mapping[str, Any]
+    database: Context, toolname: Optional[str], common_options: Mapping[str, Any]
 ):
     setup_metadata = {}
-    setup_metadata['dispatcher'] = dispatcher.__name__
     # FIXME: Naming of workflows/tools should be consistent (db and input name of tool)
     setup_metadata['context'] = {
         'class': type(database).__name__,
@@ -493,32 +494,23 @@ def _now():
 
 
 def get_run_setup(dispatching_options, common_options, toolname) -> tuple[Any, Context]:
-    try:
-        dispatcher = dispatching_options['dispatcher']
-    except KeyError:
-        from pharmpy.workflows import default_dispatcher
-
-        dispatcher = default_dispatcher
+    # FIXME: Currently only one dispatcher
+    dispatcher = Dispatcher.select_dispatcher(None)
 
     ctx = dispatching_options.get('context', None)
     if ctx is None:
         from pharmpy.workflows import default_context
 
-        broadcaster = dispatching_options.get('broadcaster', None)
         common_path = dispatching_options.get('path', None)
         if common_path is not None:
             path = Path(dispatching_options['path'])
-            ctx = default_context(
-                path.name, path.parent, common_options=common_options, broadcaster=broadcaster
-            )
+            ctx = default_context(path.name, path.parent)
         else:
             n = 1
             while True:
                 name = f"{toolname}{n}"
                 if not default_context.exists(name):
-                    ctx = default_context(
-                        name, common_options=common_options, broadcaster=broadcaster
-                    )
+                    ctx = default_context(name)
                     break
                 n += 1
 

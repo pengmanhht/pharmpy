@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from collections.abc import Collection, Hashable, Mapping, Sequence, Sized
 from math import sqrt
-from typing import Any, Self, Union
+from typing import Any, Union
 
 import pharmpy.internals.unicode as unicode
 from pharmpy.basic import Expr, Matrix, TExpr, TSymbol
@@ -54,36 +54,13 @@ class Distribution(Sized, Hashable, Immutable):
     def evalf(self, parameters: dict[Expr, float]) -> NumericDistribution:
         pass
 
-    def __getitem__(self, index) -> Distribution:
-        # NOTE: This needs to be overridden for joint distributions
-        if isinstance(index, int):
-            if index != 0:
-                raise IndexError(index)
-
-        elif isinstance(index, str):
-            if index != self._name:
-                raise KeyError(index)
-
-        else:
-            if isinstance(index, slice):
-                index = list(
-                    range(index.start, index.stop, index.step if index.step is not None else 1)
-                )
-                if index != [0]:
-                    raise IndexError(index)
-
-            if isinstance(index, Collection):
-                if len(index) != 1 or (self._name not in index and 0 not in index):
-                    raise KeyError(index)
-
-            else:
-                raise KeyError(index)
-
-        return self
-
-    def __len__(self):
+    def __len__(self) -> int:
         # NOTE: This needs to be overridden for joint distributions
         return 1
+
+    @abstractmethod
+    def __getitem__(self, item) -> Distribution:
+        pass
 
     @property
     @abstractmethod
@@ -234,6 +211,9 @@ class NormalDistribution(Distribution):
             return self._variance
         else:
             raise KeyError((name1, name2))
+
+    def __getitem__(self, index) -> Distribution:
+        return _getitem_single(self, index)
 
     def __eq__(self, other: Any):
         if not isinstance(other, NormalDistribution):
@@ -490,7 +470,7 @@ class JointNormalDistribution(Distribution):
             and self._variance == other._variance
         )
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._names)
 
     def __hash__(self):
@@ -606,9 +586,9 @@ class FiniteDistribution(Distribution):
     -------
     >>> from pharmpy.model import FiniteDistribution, Parameter
     >>> mixprob = Parameter.create('MIXPROB', 0.1)
-    >>> dist = FiniteDistribution.create("MIX", "IIV", {1: mixprob.symbol, 2: 1 - mixprob.symbol)
+    >>> dist = FiniteDistribution.create("MIX", "IIV", {1: mixprob.symbol, 2: 1 - mixprob.symbol})
     >>> dist
-    MIX ~ Finite({P(1)=MIXPROB, P(2)=1 - MIXPROB)
+    MIX ~ Finite({P(1) = MIXPROB, P(2) = 1 - MIXPROB})
     """
 
     def __init__(self, name: str, level: str, probabilities: frozenmapping[int, Expr]):
@@ -622,7 +602,7 @@ class FiniteDistribution(Distribution):
         probs = {n: Expr(expr) for n, expr in probabilities.items()}
         return cls(name, level, frozenmapping(probs))
 
-    def replace(self, **kwargs) -> Self:
+    def replace(self, **kwargs) -> FiniteDistribution:
         """Replace properties and create a new FiniteDistribution"""
         name = kwargs.get('name', self._name)
         level = kwargs.get('level', self._level)
@@ -666,7 +646,7 @@ class FiniteDistribution(Distribution):
             symbs |= expr.free_symbols
         return symbs
 
-    def subs(self, d: Mapping[TExpr, TExpr]) -> Self:
+    def subs(self, d: Mapping[TExpr, TExpr]) -> FiniteDistribution:
         """Substitute expressions
 
         Parameters
@@ -677,14 +657,15 @@ class FiniteDistribution(Distribution):
         Examples
         --------
         >>> import sympy
+        >>> from pharmpy.basic import Expr
         >>> from pharmpy.model import FiniteDistribution, Parameter
         >>> mixprob = Parameter.create('MIXPROB', 0.1)
-        >>> dist = FiniteDistribution.create("MIX", "IIV", {1: mixprob.symbol, 2: 1 - mixprob.symbol)
+        >>> dist = FiniteDistribution.create("MIX", "IIV", {1: mixprob.symbol, 2: 1 - mixprob.symbol})
         >>> dist
-        MIX ~ Finite({P(1)=MIXPROB, P(2)=1 - MIXPROB)
+        MIX ~ Finite({P(1) = MIXPROB, P(2) = 1 - MIXPROB})
         >>> dist = dist.subs({mixprob.symbol: Expr.symbol("NEWSYMBOL")})
         >>> dist
-        MIX ~ Finite({P(1)=NEWSYMBOL, P(2)=1 - NEWSYMBOL)
+        MIX ~ Finite({P(1) = NEWSYMBOL, P(2) = 1 - NEWSYMBOL})
 
         """
         newprobs = {}
@@ -718,6 +699,9 @@ class FiniteDistribution(Distribution):
             and self._level == other._level
             and self._probabilities == other._probabilities
         )
+
+    def __getitem__(self, index) -> Distribution:
+        return _getitem_single(self, index)
 
     def __hash__(self):
         return hash((self._name, self._level, self._probabilities))
@@ -773,3 +757,32 @@ def _subs_name(name: str, d: Mapping[TExpr, TExpr]) -> str:
     else:
         new_name = name
     return new_name if isinstance(new_name, str) else str(new_name)
+
+
+def _getitem_single(
+    dist: Union[NormalDistribution, FiniteDistribution], index
+) -> Union[NormalDistribution, FiniteDistribution]:
+    if isinstance(index, int):
+        if index != 0:
+            raise IndexError(index)
+
+    elif isinstance(index, str):
+        if index != dist._name:
+            raise KeyError(index)
+
+    else:
+        if isinstance(index, slice):
+            index = list(
+                range(index.start, index.stop, index.step if index.step is not None else 1)
+            )
+            if index != [0]:
+                raise IndexError(index)
+
+        if isinstance(index, Collection):
+            if len(index) != 1 or (dist._name not in index and 0 not in index):
+                raise KeyError(index)
+
+        else:
+            raise KeyError(index)
+
+    return dist
