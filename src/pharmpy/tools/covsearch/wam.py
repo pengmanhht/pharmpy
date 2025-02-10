@@ -100,8 +100,8 @@ class Test:
 class WaldTest(Test):
     def __init__(
         self,
-        thetas: np.ndarray,
-        covariance_matrix: np.ndarray,
+        thetas: Optional[np.ndarray],
+        covariance_matrix: Optional[np.ndarray],
         num_params: int,
         num_obs: Optional[int] = None,
     ) -> None:
@@ -112,35 +112,6 @@ class WaldTest(Test):
         num_obs: number of observations in the dataset, used for penalized_stat
             calculation
         """
-        # # validate inputs
-        # if not isinstance(thetas, np.ndarray) or not isinstance(
-        #     covariance_matrix, np.ndarray
-        # ):
-        #     raise ValueError("thetas and covariance_matrix must be numpy arrays")
-        # # ensure thetas is a column vector
-        # if len(thetas.shape) == 1:
-        #     thetas = thetas.reshape(-1, 1)
-        # # validate dimensions
-        # if (
-        #     thetas.shape[0] != covariance_matrix.shape[0]
-        #     or covariance_matrix.shape[0] != covariance_matrix.shape[1]
-        # ):
-        #     raise ValueError(
-        #         "Incompatible dimensions between thetas and covariance_matrix"
-        #     )
-        # # check for positive definiteness of covariance_matrix
-        # if not np.all(np.linalg.eigvals(covariance_matrix) > 0):
-        #     raise ValueError("Covariance matrix must be positive definite")
-        # # check for NaN/infinite values
-        # if np.any(np.isnan(thetas)) or np.any(np.isnan(covariance_matrix)):
-        #     raise ValueError("Input arrays contain NaN values")
-        # if np.any(np.isinf(thetas)) or np.any(np.isinf(covariance_matrix)):
-        #     raise ValueError("Input arrays contain infinite values")
-        #
-        # # validate num_obs if provided
-        # if num_obs is not None and num_obs <= 0:
-        #     raise ValueError("Number of observations must be positive")
-        #
         self.thetas = thetas
         self.covmat = covariance_matrix
         self.num_params = num_params
@@ -148,40 +119,41 @@ class WaldTest(Test):
 
     def statistic(self) -> float:
         """perform Wald test and calculate Wald Statistic"""
-        try:
-            statistic = self.thetas.T @ np.linalg.inv(self.covmat) @ self.thetas
-            return float(statistic.squeeze())
-        except np.linalg.LinAlgError:
-            raise ValueError("Failed to compute Wald statistic: singular covariance matrix")
+        if self.thetas is not None and self.covmat is not None:
+            try:
+                statistic = self.thetas.T @ np.linalg.inv(self.covmat) @ self.thetas
+                return float(statistic.squeeze())
+            except np.linalg.LinAlgError:
+                raise ValueError("Failed to compute Wald statistic: singular covariance matrix")
+        else:
+            return 0
 
     def p_value(self) -> float:
         """
         calculate Wald test p-value
         """
-        try:
-            # df = len(thetas): the number of excluded parameters
-            pval = stats.chi2.sf(self.statistic(), len(self.thetas))
-            return float(pval)
-        except Exception as e:
-            raise ValueError(f"Failed to compute p-value: {str(e)}")
+        if (wald_stat := self.statistic()) is not None and self.thetas is not None:
+            try:
+                # df: len(thetas), the number of excluded parameters
+                pval = stats.chi2.sf(wald_stat, len(self.thetas))
+                return float(pval)
+            except Exception as e:
+                raise ValueError(f"Failed to compute p-value: {str(e)}")
+        else:
+            return np.nan
 
-    def penalized_stat(self, type: Literal["aic", "bic"] = "bic") -> Optional[float]:
+    def penalized_stat(self) -> Optional[float]:
         """
         calculate penalized Wald statistic
         """
-        base_stat = self.statistic()
 
+        if self.num_obs is None:
+            raise ValueError(
+                "Number of observations (num_obs) required for calculating penalized_stat of type 'bic'"
+            )
+        wald_stat = self.statistic()
         try:
-            if type == "aic":
-                return base_stat + 2 * self.num_params
-            elif type == "bic":
-                if self.num_obs is None:
-                    raise ValueError(
-                        "Number of observations (num_obs) required for calculating penalized_stat of type 'bic'"
-                    )
-                return base_stat + self.num_params * np.log(self.num_obs)
-            else:
-                raise ValueError(f"Unknown penalty type: {type}")
+            return wald_stat + self.num_params * np.log(self.num_obs)
         except Exception as e:
             raise ValueError(f"Failed to compute penalized statistic: {str(e)}")
 
@@ -420,7 +392,7 @@ def wam_step(
     inclusion_idx = np.where(combination == 1)[0]
     num_params = num_thetas - len(exclusion_idx)
 
-    if len(exclusion_idx) > 0:
+    if len(exclusion_idx) >= 0:
         sub_covmat = covariance_matrix[np.ix_(exclusion_idx, exclusion_idx)]
         sub_thetas = covariate_thetas[exclusion_idx].reshape(-1, 1)
         wald_result = WaldTest(sub_thetas, sub_covmat, num_params, num_obs).wald_results()
