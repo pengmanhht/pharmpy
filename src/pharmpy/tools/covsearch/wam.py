@@ -528,6 +528,8 @@ def wam_nonlinear_model_selection(
     search_state: SearchState,
     p_backward: float,
 ) -> tuple:
+    best_me = search_state.best_candidate_so_far.modelentry
+    best_bic = calculate_bic(best_me.model, best_me.modelfit_results.ofv, "fixed")
     # candidate models
     new_models, candidate_steps = {}, {}
     new_modelentries = []
@@ -570,10 +572,10 @@ def wam_nonlinear_model_selection(
     }
     candidates = {inc: Candidate(me, candidate_steps[inc]) for inc, me in new_mes.items()}
     search_state.all_candidates_so_far.extend(candidates.values())
-    search_state = replace(search_state, best_candidate_so_far=candidates[best_inc])
-    # TODO: perform a BIC or LRT based selection
-    # BIC: the smallest
-    # LRT: the largest pval?
+
+    best_candidate_key = min(nonlin_bic, key=nonlin_bic.get)
+    if nonlin_bic[best_candidate_key] < best_bic:
+        search_state = replace(search_state, best_candidate_so_far=candidates[best_candidate_key])
 
     return search_state, nonlin_bic
 
