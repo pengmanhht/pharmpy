@@ -192,9 +192,26 @@ class WAMStep(BackwardStep):
 @dataclass
 class WAMResult:
     rank: int
-    results: pd.DataFrame
-    score_fetcher: list
+    results: list
+    score_fetcher: dict
     effect_func_fetcher: dict
+
+    @property
+    def processed_results(self):
+        res_table = pd.DataFrame(
+            self.results,
+            columns=["inclusion", "Wald_Stat", "Wald_Test_pvalue", "Penalized_Wald_Stat"],
+        )
+        res_table = res_table.sort_values(
+            by="Penalized_Wald_Stat",
+            ascending=True,
+        ).reset_index(drop=True)
+        return res_table
+
+    @property
+    def sorted_score_fetcher(self):
+        sorted_sf = sorted(self.score_fetcher.items(), key=lambda item: item[1])
+        return sorted_sf
 
 
 @dataclass
@@ -443,20 +460,7 @@ def wam_approx(
             effect_func_fetcher[inclusion] = effect_funcs_subset
             score_fetcher[inclusion] = wald_result.penalized_stat
 
-    # sort the score_fetcher by BIC values
-    score_fetcher = sorted(score_fetcher.items(), key=lambda item: item[1])
-    # results can be returned in the results.csv
-    results = pd.DataFrame(
-        results,
-        columns=[
-            "inclusion",
-            "Wald_Stat",
-            "Wald_Test_pvalue",
-            "Penalized_Wald_Stat",
-        ],  # pyright: ignore
-    )
-    # sort BIC in descending order, i.e. small values indicate a better fit
-    results = results.sort_values(by="Penalized_Wald_Stat", ascending=True).reset_index(drop=True)
+    wam_result = WAMResult(rank, results, score_fetcher, effect_func_fetcher)
     context.log_info(f"WAM MODEL SELECTION\n {results.head(5 if rank < 5 else rank)}")
 
     return WAMResult(rank, results, score_fetcher, effect_func_fetcher)
@@ -505,10 +509,10 @@ def wam_nonlinear_model_selection(
     # candidate models
     new_models, candidate_steps = {}, {}
     new_modelentries = []
-    score_fetcher = wam_result.score_fetcher
-    best_inc = score_fetcher[0][0]
+    score_fetcher = wam_result.sorted_score_fetcher
     rank = wam_result.rank
     effect_func_fetcher = wam_result.effect_func_fetcher
+
     for r in range(rank):
         inc = score_fetcher[r][0]
         selection = effect_func_fetcher[inc]
