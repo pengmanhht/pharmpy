@@ -296,10 +296,9 @@ def wam_init_state_and_effect(context, search_space, input_modelentry):
 
 def prepare_wam_full_model(context, model, effect_funcs):
     # add covariate effects
-    desc = model.description
+    desc = "full_model"
     for coveffect, covfuncs in effect_funcs.items():
         model = covfuncs(model)
-        desc = desc + f";({'-'.join(coveffect[:3])})"
     full_model = model.replace(name="full_model", description=desc)
 
     # fit full model
