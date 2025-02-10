@@ -465,7 +465,7 @@ def wam_approx(
             ]
         )
         # get corresponding add_covariate_effect partial functions
-        if inclusion_idx.size > 0:
+        if inclusion_idx.size >= 0:
             effect_funcs_subset = dict(
                 item for i, item in enumerate(effect_funcs.items()) if i in inclusion_idx
             )
