@@ -708,6 +708,7 @@ def _make_wam_steps(best_mdoelentry, candidates):
 def _make_wam_step_row(me_dict, children_count, best_model, candidate):
     candidate_me = candidate.modelentry
     candidate_model = candidate_me.model
+    step = _get_step_index(candidate_model.name)
 
     parent_name = candidate_me.parent.name if candidate_me.parent else candidate_model.name
     parent_me = me_dict[parent_name]
@@ -757,7 +758,7 @@ def _make_wam_step_row(me_dict, children_count, best_model, candidate):
 
     selected = children_count[candidate_model.name] >= 1 or candidate_model.name == best_model.name
     return {
-        "step": 1,  # WAM is not a stepwise approach
+        "step": step,
         "covariate_effects": effects,
         "reduced_ofv": reduced_ofv,
         "extended_ofv": extended_ofv,
@@ -771,3 +772,12 @@ def _make_wam_step_row(me_dict, children_count, best_model, candidate):
         "selected": selected,
         "model": candidate_model.name,
     }
+
+
+def _get_step_index(input_string):
+    import re
+
+    match = re.search(r"step(\d+)", input_string)
+    if match:
+        return int(match.group(1))
+    return 0
