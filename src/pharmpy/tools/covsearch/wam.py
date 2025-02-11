@@ -540,7 +540,8 @@ def wam_nonlinear_model_selection(
         selection = effect_func_fetcher[inc]
         updated_model = search_state.user_input_modelentry.model  # filtered model
         desc = updated_model.description
-        steps = search_state.best_candidate_so_far.steps
+        # steps = search_state.best_candidate_so_far.steps
+        steps = ()
         for cov_effect, cov_func in selection.items():
             updated_model = cov_func(updated_model)
             desc = desc + f";({'-'.join(cov_effect[:3])})"
