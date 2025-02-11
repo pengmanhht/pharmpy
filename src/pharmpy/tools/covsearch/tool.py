@@ -214,6 +214,7 @@ def create_workflow(
             results=results,
             search_space=search_space,
             p_backward=p_backward,
+            max_steps=max_steps,
             rank=3,
             strictness=strictness,
         )

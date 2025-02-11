@@ -42,8 +42,8 @@ wam_workflow
 
 from collections import Counter
 from dataclasses import astuple, dataclass, replace
-from itertools import product
-from typing import Literal, Optional, Union
+from itertools import count, product
+from typing import Optional, Union
 
 from pharmpy.deps import numpy as np
 from pharmpy.deps import pandas as pd
@@ -100,8 +100,8 @@ class Test:
 class WaldTest(Test):
     def __init__(
         self,
-        thetas: np.ndarray,
-        covariance_matrix: np.ndarray,
+        thetas: Optional[np.ndarray],
+        covariance_matrix: Optional[np.ndarray],
         num_params: int,
         num_obs: Optional[int] = None,
     ) -> None:
@@ -112,35 +112,6 @@ class WaldTest(Test):
         num_obs: number of observations in the dataset, used for penalized_stat
             calculation
         """
-        # # validate inputs
-        # if not isinstance(thetas, np.ndarray) or not isinstance(
-        #     covariance_matrix, np.ndarray
-        # ):
-        #     raise ValueError("thetas and covariance_matrix must be numpy arrays")
-        # # ensure thetas is a column vector
-        # if len(thetas.shape) == 1:
-        #     thetas = thetas.reshape(-1, 1)
-        # # validate dimensions
-        # if (
-        #     thetas.shape[0] != covariance_matrix.shape[0]
-        #     or covariance_matrix.shape[0] != covariance_matrix.shape[1]
-        # ):
-        #     raise ValueError(
-        #         "Incompatible dimensions between thetas and covariance_matrix"
-        #     )
-        # # check for positive definiteness of covariance_matrix
-        # if not np.all(np.linalg.eigvals(covariance_matrix) > 0):
-        #     raise ValueError("Covariance matrix must be positive definite")
-        # # check for NaN/infinite values
-        # if np.any(np.isnan(thetas)) or np.any(np.isnan(covariance_matrix)):
-        #     raise ValueError("Input arrays contain NaN values")
-        # if np.any(np.isinf(thetas)) or np.any(np.isinf(covariance_matrix)):
-        #     raise ValueError("Input arrays contain infinite values")
-        #
-        # # validate num_obs if provided
-        # if num_obs is not None and num_obs <= 0:
-        #     raise ValueError("Number of observations must be positive")
-        #
         self.thetas = thetas
         self.covmat = covariance_matrix
         self.num_params = num_params
@@ -148,42 +119,49 @@ class WaldTest(Test):
 
     def statistic(self) -> float:
         """perform Wald test and calculate Wald Statistic"""
-        try:
-            statistic = self.thetas.T @ np.linalg.inv(self.covmat) @ self.thetas
-            return float(statistic.squeeze())
-        except np.linalg.LinAlgError:
-            raise ValueError("Failed to compute Wald statistic: singular covariance matrix")
+        if self.thetas is not None and self.covmat is not None:
+            try:
+                statistic = self.thetas.T @ np.linalg.inv(self.covmat) @ self.thetas
+                statistic = float(statistic.squeeze())
+            except np.linalg.LinAlgError:
+                raise ValueError("Failed to compute Wald statistic: singular covariance matrix")
+        else:
+            statistic = 0
+
+        return statistic
 
     def p_value(self) -> float:
         """
         calculate Wald test p-value
         """
-        try:
-            # df = len(thetas): the number of excluded parameters
-            pval = stats.chi2.sf(self.statistic(), len(self.thetas))
-            return float(pval)
-        except Exception as e:
-            raise ValueError(f"Failed to compute p-value: {str(e)}")
+        if (wald_stat := self.statistic()) is not None and self.thetas is not None:
+            try:
+                # df: len(thetas), the number of excluded parameters
+                pval = stats.chi2.sf(wald_stat, len(self.thetas))
+                pval = float(pval)
+            except Exception as e:
+                raise ValueError(f"Failed to compute p-value: {str(e)}")
+        else:
+            pval = np.nan
 
-    def penalized_stat(self, type: Literal["aic", "bic"] = "bic") -> Optional[float]:
+        return pval
+
+    def penalized_stat(self) -> Optional[float]:
         """
         calculate penalized Wald statistic
         """
-        base_stat = self.statistic()
 
+        if self.num_obs is None:
+            raise ValueError(
+                "Number of observations (num_obs) required for calculating penalized_stat of type 'bic'"
+            )
+        wald_stat = self.statistic()
         try:
-            if type == "aic":
-                return base_stat + 2 * self.num_params
-            elif type == "bic":
-                if self.num_obs is None:
-                    raise ValueError(
-                        "Number of observations (num_obs) required for calculating penalized_stat of type 'bic'"
-                    )
-                return base_stat + self.num_params * np.log(self.num_obs)
-            else:
-                raise ValueError(f"Unknown penalty type: {type}")
+            penalized_stat = wald_stat + self.num_params * np.log(self.num_obs)
         except Exception as e:
             raise ValueError(f"Failed to compute penalized statistic: {str(e)}")
+
+        return penalized_stat
 
     def wald_results(self):
         return WaldResult(
@@ -220,15 +198,39 @@ class WAMStep(BackwardStep):
 @dataclass
 class WAMResult:
     rank: int
-    results: pd.DataFrame
-    score_fetcher: list
+    results: list
+    score_fetcher: dict
     effect_func_fetcher: dict
+
+    @property
+    def processed_results(self):
+        res_table = pd.DataFrame(
+            self.results,
+            columns=["inclusion", "Wald_Stat", "Wald_Test_pvalue", "Penalized_Wald_Stat"],
+        )
+        res_table = res_table.sort_values(
+            by="Penalized_Wald_Stat",
+            ascending=True,
+        ).reset_index(drop=True)
+        return res_table
+
+    @property
+    def sorted_score_fetcher(self):
+        sorted_sf = sorted(self.score_fetcher.items(), key=lambda item: item[1])
+        return sorted_sf
 
 
 @dataclass
-class WAMSearchState:
-    search_state: SearchState
-    wam_result: WAMResult
+class WAMSearchState(SearchState):
+    wam_result: Optional[WAMResult] = None
+
+    def __eq__(self, other):
+        if not isinstance(other, SearchState):
+            return NotImplemented
+        return (self.best_candidate_so_far, self.all_candidates_so_far) == (
+            other.best_candidate_so_far,
+            other.all_candidates_so_far,
+        )
 
 
 def wam_workflow(
@@ -237,6 +239,7 @@ def wam_workflow(
     search_space: Union[str, ModelFeatures],
     p_backward: float = 0.05,
     rank: int = 3,
+    max_steps: int = -1,
     strictness: str = "",
 ):
     wb = WorkflowBuilder(name="covsearch")
@@ -253,6 +256,7 @@ def wam_workflow(
         "wam_search",
         wam_backward,
         rank,
+        max_steps,
         p_backward,
     )
     wb.add_task(wam_search_task, predecessors=init_task)
@@ -280,11 +284,11 @@ def wam_init_state_and_effect(context, search_space, input_modelentry):
     # prepare full model (call fit workflow inside the function)
     full_me = prepare_wam_full_model(context, filtered_model, effect_funcs)
 
-    # init cnadiates
+    # init candiate
     candidate = Candidate(full_me, steps=())
 
     # init search state
-    search_state = SearchState(
+    search_state = WAMSearchState(
         user_input_modelentry=input_me,
         start_modelentry=full_me,
         best_candidate_so_far=candidate,
@@ -297,7 +301,7 @@ def wam_init_state_and_effect(context, search_space, input_modelentry):
 def prepare_wam_full_model(context, model, effect_funcs):
     # add covariate effects
     desc = "full_model"
-    for coveffect, covfuncs in effect_funcs.items():
+    for covfuncs in effect_funcs.values():
         model = covfuncs(model)
     full_model = model.replace(name="full_model", description=desc)
 
@@ -372,41 +376,37 @@ def _get_covar_names(effect_funcs):
 def wam_backward(
     context,
     rank: Optional[int],
+    max_steps: int,
     p_backward: float,
     state_and_effect: StateAndEffect,
 ):
     effect_funcs = state_and_effect.effect_funcs
     search_state = state_and_effect.search_state
-    full_modelentry = search_state.best_candidate_so_far.modelentry
-    full_model_ofv = full_modelentry.modelfit_results.ofv  # pyright: ignore
-    full_model_bic = calculate_bic(
-        full_modelentry.model,
-        full_model_ofv,  # pyright: ignore
-        "fixed",
-    )
 
-    wam_result = wam_approx(
-        context,
-        full_modelentry,
-        effect_funcs,
-        rank,
-    )
-
-    search_state, nonlin_bic = wam_nonlinear_model_selection(
-        context, wam_result, search_state, p_backward
-    )
-    # state_and_effect = replace(state_and_effect, search_state=search_state)
-
-    rank, score_fetcher = wam_result.rank, wam_result.score_fetcher
-    log_info = [f"NONLINEAR MODEL RANK\n FULL MODEL: BIC {full_model_bic:.3f}\n"]
-    for r in range(rank):
-        inc = score_fetcher[r][0]
-        log_info.append(
-            f"    RANK#{r + 1}:\n   BIC {nonlin_bic[inc]:.3f} | Penalized Wald Stat {score_fetcher[r][1]:.3f}\n"
+    steps = range(1, max_steps + 1) if max_steps >= 1 else count(1)
+    for step in steps:
+        # Wald Approximation
+        search_state = wam_approx(
+            context,
+            state_and_effect,
+            rank,
         )
-    context.log_info("\n".join(log_info))
 
-    return WAMSearchState(search_state=search_state, wam_result=wam_result)
+        search_state, effect_funcs = wam_nonlinear_model_selection(
+            context, step, search_state, p_backward
+        )
+
+        if search_state is state_and_effect.search_state:
+            break
+        else:
+            state_and_effect = replace(state_and_effect, search_state=search_state)
+
+        if not effect_funcs:
+            break
+        else:
+            state_and_effect = replace(state_and_effect, effect_funcs=effect_funcs)
+
+    return search_state
 
 
 def wam_step(
@@ -420,14 +420,13 @@ def wam_step(
     inclusion_idx = np.where(combination == 1)[0]
     num_params = num_thetas - len(exclusion_idx)
 
-    if len(exclusion_idx) > 0:
+    if len(exclusion_idx) >= 0:
         sub_covmat = covariance_matrix[np.ix_(exclusion_idx, exclusion_idx)]
         sub_thetas = covariate_thetas[exclusion_idx].reshape(-1, 1)
         wald_result = WaldTest(sub_thetas, sub_covmat, num_params, num_obs).wald_results()
     else:
         wald_result = WaldResult(np.inf, 1.0, np.inf)
 
-    # index of covariates included in the model (covariate_thetas[inclusion_idx] to get the keys)
     inclusion = ",".join(map(str, inclusion_idx))
 
     return wald_result, inclusion, inclusion_idx
@@ -435,17 +434,20 @@ def wam_step(
 
 def wam_approx(
     context,
-    full_modelentry,
-    effect_funcs,
+    state_and_effect,
     rank,
-) -> WAMResult:
+) -> WAMSearchState:
+    effect_funcs = state_and_effect.effect_funcs
+    search_state = state_and_effect.search_state
+    full_modelentry = search_state.best_candidate_so_far.modelentry
+
     results = []
     effect_func_fetcher, score_fetcher = {}, {}
 
     # wald approximation
     wald_inputs = prepare_wald_inputs(full_modelentry, effect_funcs)
     combinations = np.array(list(product([0, 1], repeat=wald_inputs.num_covariates)))
-    # reassign rank values
+    # reassign rank value
     rank = min(combinations.shape[0], rank) if rank else combinations.shape[0]
     for comb in combinations:
         wald_result, inclusion, inclusion_idx = wam_step(
@@ -471,23 +473,16 @@ def wam_approx(
             effect_func_fetcher[inclusion] = effect_funcs_subset
             score_fetcher[inclusion] = wald_result.penalized_stat
 
-    # sort the score_fetcher by BIC values
-    score_fetcher = sorted(score_fetcher.items(), key=lambda item: item[1])
-    # results can be returned in the results.csv
-    results = pd.DataFrame(
-        results,
-        columns=[
-            "inclusion",
-            "Wald_Stat",
-            "Wald_Test_pvalue",
-            "Penalized_Wald_Stat",
-        ],  # pyright: ignore
-    )
-    # sort BIC in descending order, i.e. small values indicate a better fit
-    results = results.sort_values(by="Penalized_Wald_Stat", ascending=True).reset_index(drop=True)
-    context.log_info(f"WAM MODEL SELECTION\n {results.head(5 if rank < 5 else rank)}")
+    wam_result = WAMResult(rank, results, score_fetcher, effect_func_fetcher)
+    search_state = replace(search_state, wam_result=wam_result)
 
-    return WAMResult(rank, results, score_fetcher, effect_func_fetcher)
+    _wam_loginfo(context, wam_result.processed_results, rank)
+
+    return search_state
+
+
+def _wam_loginfo(context, results, rank):
+    context.log_info(f"WAM MODEL SELECTION\n {results.head(5 if rank < 5 else rank)}")
 
 
 def prepare_wald_inputs(modelentry: ModelEntry, effect_funcs: dict) -> WaldInputs:
@@ -524,28 +519,35 @@ def prepare_wald_inputs(modelentry: ModelEntry, effect_funcs: dict) -> WaldInput
 
 def wam_nonlinear_model_selection(
     context,
-    wam_result: WAMResult,
-    search_state: SearchState,
+    step,
+    search_state: WAMSearchState,
     p_backward: float,
 ) -> tuple:
     best_me = search_state.best_candidate_so_far.modelentry
-    best_bic = calculate_bic(best_me.model, best_me.modelfit_results.ofv, "fixed")
-    # candidate models
-    new_models, candidate_steps = {}, {}
+    best_bic = calculate_bic(best_me.model, best_me.modelfit_results.ofv, "mixed")
+    wam_result = search_state.wam_result
+    assert isinstance(wam_result, WAMResult)
+
+    # prepare nonlinear model selection
+    new_effect_funcs, new_models, candidate_steps = {}, {}, {}
     new_modelentries = []
-    score_fetcher = wam_result.score_fetcher
+    score_fetcher = wam_result.sorted_score_fetcher
     rank = wam_result.rank
     effect_func_fetcher = wam_result.effect_func_fetcher
+
     for r in range(rank):
         inc = score_fetcher[r][0]
         selection = effect_func_fetcher[inc]
         updated_model = search_state.user_input_modelentry.model  # filtered model
         desc = updated_model.description
-        steps = search_state.best_candidate_so_far.steps
+        # steps = search_state.best_candidate_so_far.steps
+        steps = ()
         for cov_effect, cov_func in selection.items():
             updated_model = cov_func(updated_model)
             desc = desc + f";({'-'.join(cov_effect[:3])})"
-            updated_model = updated_model.replace(name=f"wam_rank#{r + 1}", description=desc)
+            updated_model = updated_model.replace(
+                name=f"wam_step{step}_rank#{r + 1}", description=desc
+            )
             updated_model = add_parameter_uncertainty_step(updated_model, "RMAT")
             steps += (WAMStep(p_backward, DummyEffect(*cov_effect)),)
 
@@ -558,15 +560,17 @@ def wam_nonlinear_model_selection(
         )
         new_models[inc] = updated_model
         new_modelentries.append(updated_modelentry)
+
     fit_wf = create_fit_workflow(modelentries=new_modelentries)
     wb = WorkflowBuilder(fit_wf)
     task_gather = Task("gather", lambda *models: models)
     wb.add_task(task_gather, predecessors=wb.output_tasks)
     new_modelentries = context.call_workflow(Workflow(wb), "fit_nonlinear_models")
+
     model_map = {me.model: me for me in new_modelentries}
     new_mes = {inc: model_map[model] for inc, model in new_models.items() if model in model_map}
     nonlin_bic = {
-        inc: calculate_bic(me.model, me.modelfit_results.ofv, "fixed")
+        inc: calculate_bic(me.model, me.modelfit_results.ofv, "mixed")
         for inc, me in new_mes.items()
     }
     candidates = {inc: Candidate(me, candidate_steps[inc]) for inc, me in new_mes.items()}
@@ -575,14 +579,32 @@ def wam_nonlinear_model_selection(
     best_candidate_key = min(nonlin_bic, key=nonlin_bic.get)
     if nonlin_bic[best_candidate_key] < best_bic:
         search_state = replace(search_state, best_candidate_so_far=candidates[best_candidate_key])
+        new_effect_funcs = effect_func_fetcher[best_candidate_key]
 
-    return search_state, nonlin_bic
+    _wam_nonlin_loginfo(context, step, best_bic, nonlin_bic, wam_result)
+
+    return search_state, new_effect_funcs
+
+
+def _wam_nonlin_loginfo(context, step, best_bic, nonlin_bic, wam_result):
+    rank = wam_result.rank
+    score_fetcher = wam_result.sorted_score_fetcher
+
+    log_info = [f"STEP{step} NONLINEAR MODEL RANK\n FULL MODEL: BIC {best_bic:.3f}\n"]
+    for r in range(rank):
+        inc = score_fetcher[r][0]
+        log_info.append(
+            f"    RANK#{r + 1}:\n   BIC {nonlin_bic[inc]:.3f} | Penalized Wald Stat {score_fetcher[r][1]:.3f}\n"
+        )
+    context.log_info("\n".join(log_info))
 
 
 # ============= WAM RESULTS ===============
-def wam_task_result(context, p_backward: float, strictness: str, wam_search_state: WAMSearchState):
-    state = wam_search_state.search_state
-    wam_result_table = wam_search_state.wam_result.results
+def wam_task_result(context, p_backward: float, strictness: str, state: WAMSearchState):
+    if isinstance(state.wam_result, WAMResult):
+        wam_result_table = state.wam_result.processed_results
+    else:
+        wam_result_table = None
     candidates = state.all_candidates_so_far
     modelentries = list(map(lambda candidate: candidate.modelentry, candidates))
     full_modelentry, *rest_modelentries = modelentries
@@ -686,6 +708,7 @@ def _make_wam_steps(best_mdoelentry, candidates):
 def _make_wam_step_row(me_dict, children_count, best_model, candidate):
     candidate_me = candidate.modelentry
     candidate_model = candidate_me.model
+    step = _get_step_index(candidate_model.name)
 
     parent_name = candidate_me.parent.name if candidate_me.parent else candidate_model.name
     parent_me = me_dict[parent_name]
@@ -735,7 +758,7 @@ def _make_wam_step_row(me_dict, children_count, best_model, candidate):
 
     selected = children_count[candidate_model.name] >= 1 or candidate_model.name == best_model.name
     return {
-        "step": 1,  # WAM is not a stepwise approach
+        "step": step,
         "covariate_effects": effects,
         "reduced_ofv": reduced_ofv,
         "extended_ofv": extended_ofv,
@@ -749,3 +772,12 @@ def _make_wam_step_row(me_dict, children_count, best_model, candidate):
         "selected": selected,
         "model": candidate_model.name,
     }
+
+
+def _get_step_index(input_string):
+    import re
+
+    match = re.search(r"step(\d+)", input_string)
+    if match:
+        return int(match.group(1))
+    return 0
