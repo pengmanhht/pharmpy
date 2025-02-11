@@ -122,11 +122,13 @@ class WaldTest(Test):
         if self.thetas is not None and self.covmat is not None:
             try:
                 statistic = self.thetas.T @ np.linalg.inv(self.covmat) @ self.thetas
-                return float(statistic.squeeze())
+                statistic = float(statistic.squeeze())
             except np.linalg.LinAlgError:
                 raise ValueError("Failed to compute Wald statistic: singular covariance matrix")
         else:
-            return 0
+            statistic = 0
+
+        return statistic
 
     def p_value(self) -> float:
         """
@@ -136,11 +138,13 @@ class WaldTest(Test):
             try:
                 # df: len(thetas), the number of excluded parameters
                 pval = stats.chi2.sf(wald_stat, len(self.thetas))
-                return float(pval)
+                pval = float(pval)
             except Exception as e:
                 raise ValueError(f"Failed to compute p-value: {str(e)}")
         else:
-            return np.nan
+            pval = np.nan
+
+        return pval
 
     def penalized_stat(self) -> Optional[float]:
         """
@@ -153,9 +157,11 @@ class WaldTest(Test):
             )
         wald_stat = self.statistic()
         try:
-            return wald_stat + self.num_params * np.log(self.num_obs)
+            penalized_stat = wald_stat + self.num_params * np.log(self.num_obs)
         except Exception as e:
             raise ValueError(f"Failed to compute penalized statistic: {str(e)}")
+
+        return penalized_stat
 
     def wald_results(self):
         return WaldResult(
