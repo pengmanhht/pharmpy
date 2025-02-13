@@ -17,8 +17,8 @@ from pharmpy.tools.structsearch.tmdd import (
     create_remaining_models,
     create_wagner_model,
 )
-from pharmpy.tools.structsearch.tool import create_workflow, validate_input
-from pharmpy.workflows import ModelfitResults, Workflow
+from pharmpy.tools.structsearch.tool import create_result_tables, create_workflow, validate_input
+from pharmpy.workflows import ModelEntry, ModelfitResults, Workflow
 
 ests = pd.Series(
     {
@@ -189,6 +189,36 @@ def test_create_workflow_drug_metabolite(load_model_for_test, testdata):
     )
 
 
+def test_create_result_tables(load_model_for_test, testdata, model_entry_factory):
+    model_start = load_model_for_test(testdata / 'nonmem' / 'pheno.mod')
+    res_start = read_modelfit_results(testdata / 'nonmem' / 'pheno.mod')
+    me_start = ModelEntry.create(model_start, modelfit_results=res_start)
+
+    qss_models = create_qss_models(model_start, res_start.parameter_estimates, None)
+    qss_entries = model_entry_factory(qss_models)
+    qss_best = min(qss_entries, key=lambda me: me.modelfit_results.ofv)
+
+    remaining_models = create_remaining_models(
+        model_start, qss_best.modelfit_results.parameter_estimates, 0, None, len(qss_entries)
+    )
+    remaining_entries = model_entry_factory(remaining_models)
+
+    tables = create_result_tables(
+        me_start, (qss_entries, remaining_entries), strictness='minimization_successful'
+    )
+
+    model_entries = [me_start] + qss_entries + remaining_entries
+    summary_models = tables['summary_models']
+    assert len(summary_models) == len(model_entries)
+    steps = list(summary_models.index.get_level_values('step'))
+    assert set(steps) == {0, 1, 2}
+
+    summary_tool = tables['summary_tool']
+    assert len(summary_tool) == len(model_entries) + 1
+    steps = list(summary_tool.index.get_level_values('step'))
+    assert set(steps) == {1, 2}
+
+
 @pytest.mark.parametrize(
     ('arguments', 'exception', 'match'),
     [
@@ -287,4 +317,8 @@ def _add_random_dvids(model):
     df = model.dataset.copy()
     rng = create_rng(23)
     df['DVID'] = np.array([rng.integers(1, 6) for i in range(len(df))])
-    return model.replace(dataset=df)
+    model = model.replace(dataset=df)
+    di = model.datainfo
+    col = di['DVID'].replace(type='dvid')
+    di = di.set_column(col)
+    return model.replace(datainfo=di)

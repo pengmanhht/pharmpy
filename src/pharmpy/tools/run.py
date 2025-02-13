@@ -199,6 +199,12 @@ def run_tool_with_name(
 ) -> Union[Model, list[Model], tuple[Model], Results]:
     dispatching_options, common_options, tool_options = split_common_options(kwargs)
 
+    if validate_input := getattr(tool, 'validate_input', None):
+        try:
+            validate_input(*args, **tool_options)
+        except Exception as err:
+            raise InputValidationError(str(err))
+
     create_workflow = tool.create_workflow
 
     dispatcher, ctx = get_run_setup(dispatching_options, common_options, name)
@@ -214,12 +220,6 @@ def run_tool_with_name(
     )
 
     ctx.store_metadata(tool_metadata)
-
-    if validate_input := getattr(tool, 'validate_input', None):
-        try:
-            validate_input(*args, **tool_options)
-        except Exception as err:
-            raise InputValidationError(str(err))
 
     if (
         "model" in tool_options
@@ -390,7 +390,6 @@ def _create_metadata_tool(
     kwargs: Mapping[str, Any],
 ):
     tool_params = inspect.signature(tool_func).parameters
-    tool_param_types = get_type_hints(tool_func)
     # FIXME: Add config file dump, estimation tool etc.
     tool_metadata = {
         'pharmpy_version': pharmpy.__version__,
@@ -417,25 +416,75 @@ def _create_metadata_tool(
 
     if tool_name != 'modelfit':
         db = database.model_database
-        for key, db_name in _store_input_models(db, tool_params, tool_param_types, args, kwargs):
-            tool_metadata['tool_options'][key] = {
-                '__class__': 'Model',
-                'key': db_name,
-            }
+        _store_input_models(db, tool_metadata, tool_params, kwargs)
 
     return tool_metadata
+
+
+def _store_input_models(db, metadata, tool_params, kwargs):
+    # Loop through all kwargs to find Model and ModelfitResults objects
+    # If found will attempt to pair them together assuming that ones put closest
+    # together given the function signature order belong together
+    previous = None
+    previous_arg = None
+    for arg in tool_params.keys():
+        current = kwargs.get(arg, None)
+        if isinstance(current, (Model, ModelfitResults)):
+            if previous is None:
+                previous = current
+                previous_arg = arg
+            else:
+                previous_is_model = isinstance(previous, Model)
+                current_is_model = isinstance(current, Model)
+                if previous_is_model and not current_is_model:
+                    _store_model_and_results(db, metadata, previous_arg, previous, arg, current)
+                    previous = None
+                elif not previous_is_model and current_is_model:
+                    _store_model_and_results(db, metadata, arg, current, previous_arg, previous)
+                    previous = None
+                elif previous_is_model:
+                    _store_model(db, metadata, previous_arg, previous)
+                    previous = current
+                    previous_arg = arg
+                else:
+                    previous = current
+                    previous_arg = arg
+    if previous is not None and isinstance(previous, Model):
+        _store_model(db, metadata, previous_arg, previous)
+
+
+def _store_model_and_results(
+    db: ModelDatabase, metadata, model_arg: str, model: Model, results_arg, results: ModelfitResults
+):
+    me = ModelEntry.create(model=model, modelfit_results=results)
+    with db.transaction(me) as txn:
+        txn.store_model()
+        txn.store_modelfit_results()
+        dbkey = str(txn.key)
+        metadata['tool_options'][model_arg] = {
+            '__class__': 'Model',
+            'key': dbkey,
+        }
+        metadata['tool_options'][results_arg] = {
+            '__class__': 'ModelfitResults',
+            'key': dbkey,
+        }
+
+
+def _store_model(db: ModelDatabase, metadata, arg: str, model: Model):
+    with db.transaction(model) as txn:
+        txn.store_model()
+        dbkey = str(txn.key)
+        metadata['tool_options'][arg] = {
+            '__class__': 'Model',
+            'key': dbkey,
+        }
 
 
 def _create_metadata_common(
     database: Context, toolname: Optional[str], common_options: Mapping[str, Any]
 ):
     setup_metadata = {}
-    # FIXME: Naming of workflows/tools should be consistent (db and input name of tool)
-    setup_metadata['context'] = {
-        'class': type(database).__name__,
-        'toolname': toolname,
-        'path': str(database.path),
-    }
     for key, value in common_options.items():
         if key not in setup_metadata.keys():
             if isinstance(value, Path):
@@ -443,14 +492,6 @@ def _create_metadata_common(
             setup_metadata[str(key)] = value
 
     return setup_metadata
-
-
-def _store_input_models(
-    db: ModelDatabase, params, types, args: Sequence, kwargs: Mapping[str, Any]
-):
-    for param_key, model in _input_models(params, types, args, kwargs):
-        key = _store_input_model(db, model)
-        yield param_key, key
 
 
 def _filter_params(kind, params, types):
@@ -472,21 +513,6 @@ def _input_model_param_keys(params, types):
 def _results_param_keys(params, types):
     for _, param_key in _filter_params(ModelfitResults, params, types):
         yield param_key
-
-
-def _input_models(params, types, args: Sequence, kwargs: Mapping[str, Any]):
-    for i, param_key in _filter_params(Model, params, types):
-        model = args[i] if i < len(args) else kwargs.get(param_key)
-        if model is None:
-            continue
-        yield param_key, model
-
-
-def _store_input_model(db: ModelDatabase, model: Model):
-    with db.transaction(model) as txn:
-        txn.store_model()
-        txn.store_modelfit_results()
-        return str(txn.key)
 
 
 def _now():
@@ -514,6 +540,12 @@ def get_run_setup(dispatching_options, common_options, toolname) -> tuple[Any, C
                     break
                 n += 1
 
+    dispatching_options['context'] = {
+        '__class__': type(ctx).__name__,
+        'name': str(ctx.name),
+        'ref': str(ctx.ref),
+    }
+
     return dispatcher, ctx
 
 
@@ -526,39 +558,6 @@ def _open_context(source):
     else:
         raise NotImplementedError(f'Not implemented for type \'{type(source)}\'')
     return context
-
-
-def retrieve_model(
-    source: Union[str, Path, Context],
-    name: str,
-) -> Model:
-    """Retrieve a model from a context/tool run
-
-    Any models created and run by the tool can be
-    retrieved.
-
-    Parameters
-    ----------
-    source : str, Path, Context
-        Source where to find models. Can be a path (as str or Path), or a
-        Context
-    name : str
-        Name of the model
-
-    Return
-    ------
-    Model
-        The model object
-
-    Examples
-    --------
-    >>> from pharmpy.tools import retrieve_model
-    >>> tooldir_path = 'path/to/tool/directory'
-    >>> model = retrieve_model(tooldir_path, 'run1')      # doctest: +SKIP
-
-    """
-    context = _open_context(source)
-    return context.retrieve_model_entry(name).model
 
 
 def retrieve_models(
