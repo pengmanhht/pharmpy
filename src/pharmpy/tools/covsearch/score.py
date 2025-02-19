@@ -1,0 +1,459 @@
+"""
+Score test and Lagrange Multiplier
+Score test measures the slope (gradient) difference of likelihood function
+at maximum likelihood estimate and the point of null hypothesis.
+
+H0: theta = theta0
+H1: theta =/= theta0
+
+Score Statistic = score.T @ COV @ score
+    Score statistic follows Chi2 distribution
+    Under the null hypothesis, large values of Score statistic providing evidence favor
+    the inclusion of the associated covariate effect, i.e. the covariate effect cannot
+    be ignored.
+
+Penalized Score Statistic = Score Statistic - num_params * log(num_observations)
+    Large values of penalized Score statisitc indicate a potentially true covariate effect
+    in the model
+
+NOTE: NONMEM has difficulty evaluating variances and gradients around thetas that are fixed at 0
+    or even near 0, so we use 1 as the null positions and modify the covariate effect formula
+    from: Parameter_i = Parameter + THETA       * Covariate_i + ETA_i
+    to:   Parameter_i = Parameter + (THETA - 1) * Covariate_i + ETA_i
+"""
+
+from abc import abstractmethod
+from dataclasses import dataclass, replace
+from functools import partial
+from itertools import count, product
+from typing import Literal, Optional
+
+from numpy.typing import ArrayLike
+from pharmpy.deps import numpy as np
+from pharmpy.deps import pandas as pd
+from pharmpy.deps.scipy import stats
+from pharmpy.model import Model
+from pharmpy.modeling.data import get_observations
+from pharmpy.modeling.estimation_steps import set_estimation_step
+from pharmpy.modeling.parameters import fix_parameters, get_thetas
+from pharmpy.modeling.results import calculate_bic
+from pharmpy.tools.common import update_initial_estimates
+from pharmpy.tools.covsearch.util import (
+    Candidate,
+    DummyEffect,
+    ForwardStep,
+    SearchState,
+    StateAndEffect,
+    store_input_model,
+)
+from pharmpy.tools.covsearch.samba import samba_effect_funcs_and_start_model
+from pharmpy.tools.covsearch.score_covariate_effect import score_test_add_covariate_effect
+from pharmpy.modeling import (
+    add_estimation_step,
+    add_parameter_uncertainty_step,
+    remove_estimation_step,
+    unfix_parameters,
+)
+from pharmpy.tools.modelfit import create_fit_workflow
+from pharmpy.workflows import ModelEntry, Task, Workflow, WorkflowBuilder
+from pharmpy.workflows.results import ModelfitResults
+
+
+class Test:
+    def __init__(self, num_params: Optional[int] = None, num_obs: Optional[int] = None) -> None:
+        self.num_params = num_params
+        self.num_obs = num_obs
+
+    @property
+    @abstractmethod
+    def statistic(self) -> float:
+        pass
+
+    @property
+    @abstractmethod
+    def pval(self) -> float:
+        pass
+
+    @property
+    def penalized_stat(self) -> float:
+        if self.num_obs is None:
+            raise ValueError("number of observations required for calculating penalized statistic")
+        base_stat = self.statistic
+        try:
+            penalized_stat = base_stat - self.num_params * np.log(self.num_obs)
+        except Exception as e:
+            raise ValueError(f"Failed to compute penalized statistic: {str(e)}")
+
+        return penalized_stat
+
+    def result(self):
+        return TestResult(
+            stat=self.statistic,
+            pval=self.pval,
+            penalized_stat=self.penalized_stat,
+        )
+
+
+class ScoreTest(Test):
+    def __init__(self, scores, covmat, num_params, num_obs):
+        super().__init__(num_params, num_obs)
+        self.scores = scores
+        self.covmat = covmat
+
+    @property
+    def statistic(self):
+        if self.scores is not None and self.covmat is not None:
+            try:
+                stat = self.scores.T @ self.covmat @ self.scores
+                stat = float(stat.squeeze())
+            except np.linalg.LinAlgError:
+                raise ValueError("Failed to compute score statistic: singular covariance matrix")
+        else:
+            stat = 0
+        return stat
+
+    @property
+    def pval(self):
+        if (stat := self.statistic) is not None and self.scores is not None:
+            try:
+                pval = stats.chi2.sf(stat, len(self.scores))
+                pval = float(pval)
+            except Exception as e:
+                raise ValueError(f"Failed to compute p-value: {str(e)}")
+        else:
+            pval = np.nan
+        return pval
+
+
+@dataclass
+class TestResult:
+    stat: Optional[float]
+    pval: Optional[float]
+    penalized_stat: Optional[float]
+
+
+@dataclass
+class StepResult:
+    rank: int
+    result: list
+    score_fetcher: dict
+    effect_fetcher: dict
+
+    def processed_result(
+        self,
+        sort_by: Literal["stat", "pval", "penalized_stat"] = "penalized_stat",
+        ascending: bool = False,
+    ):
+        res_table = pd.DataFrame(
+            self.result,
+            columns=["inclusion", "stat", "pval", "penalized_stat"],
+        )
+        res_table.sort_values(
+            by=sort_by,
+            ascending=ascending,
+        ).reset_index(drop=True)
+        return res_table
+
+    def sort_score_fetcher(self, reverse: bool = False):
+        sorted_sf = sorted(self.score_fetcher.items(), key=lambda item: item[1], reverse=reverse)
+        return sorted_sf
+
+
+@dataclass
+class ScoreSearchState(SearchState):
+    aux: Optional[StepResult] = None
+
+
+@dataclass
+class ScoreInput:
+    scores: ArrayLike
+    covmat: ArrayLike
+    num_params: int
+    num_covars: int
+    num_obs: int
+
+
+def score_workflow(
+    model: Model,
+    results: ModelfitResults,
+    search_space: str,
+    p_forward: float = 0.05,
+    rank: int = 1,
+    max_steps: int = -1,
+    strictness: str = "",
+):
+    wb = WorkflowBuilder(name="covsearch")
+
+    store_task = Task("store_input_model", store_input_model, model, results)
+    wb.add_task(store_task)
+
+    init_task = Task("init", score_init_state_and_effect, search_space)
+    wb.add_task(init_task, predecessors=store_task)
+
+    # Score forward search task
+    score_forward_task = Task(
+        "score_search",
+        score_forward,
+        rank,
+        max_steps,
+        p_forward,
+    )
+    wb.add_task(score_forward_task, predecessors=init_task)
+    search_output = wb.output_tasks
+
+    # result task
+    # result_task = Task("result", score_task_result, p_forward, strictness)
+    # wb.add_task(result_task, predecessors=search_output)
+
+    return Workflow(wb)
+
+
+def score_forward(
+    context,
+    rank: int,
+    max_steps: int,
+    p_forward: float,
+    state_and_effect: StateAndEffect,
+):
+    effect_funcs = state_and_effect.effect_funcs
+    search_state = state_and_effect.search_state
+
+    steps = range(1, max_steps + 1) if max_steps >= 1 else count(1)
+    for step in steps:
+        search_state = score_step(
+            context,
+            state_and_effect,
+            rank,
+        )
+        search_state, effect_funcs = score_nonlinear_model_selection(
+            context, step, search_state, p_forward
+        )
+
+        if search_state is state_and_effect.search_state:
+            break
+        else:
+            state_and_effect = replace(state_and_effect, search_state=search_state)
+
+        if not effect_funcs:
+            break
+        else:
+            state_and_effect = replace(state_and_effect, effect_funcs=effect_funcs)
+
+    return search_state
+
+
+def score_init_state_and_effect(context, search_space, input_modelentry):
+    model = input_modelentry.model
+    effect_funcs, null_model = samba_effect_funcs_and_start_model(search_space, model)
+
+    null_modelentry = prepare_null_model(context, null_model, effect_funcs)
+    assert isinstance(null_modelentry, ModelEntry)
+
+    candidate = Candidate(null_modelentry, ())
+
+    search_state = ScoreSearchState(
+        user_input_modelentry=input_modelentry,
+        start_modelentry=null_modelentry,
+        best_candidate_so_far=candidate,
+        all_candidates_so_far=[candidate],
+    )
+    return StateAndEffect(search_state=search_state, effect_funcs=effect_funcs)
+
+
+def set_score_estimation_step(model):
+    model = remove_estimation_step(model, 0)
+    # use IMP for estimation
+    model = add_estimation_step(
+        model,
+        method="IMP",
+        idx=0,
+        interaction=True,
+        niter=100,
+        auto=True,
+        isample=1000,
+        tool_options={
+            "EONLY": "0",
+            "NOABORT": 0,
+            "CTYPE": "3",
+            "RANMETHOD": "3S2",
+        },
+    )
+
+    model = add_parameter_uncertainty_step(model, "RMAT")
+
+    return model
+
+
+def prepare_null_model(context, model, effect_funcs):
+    model = set_score_estimation_step(model)
+    score_effect_funcs = _process_effect_funcs(effect_funcs)
+    for cov_func in score_effect_funcs.values():
+        model = cov_func(model)
+    model = model.replace(name="null_model", description="null_model")
+
+    # fix covaraite effect parameters
+    covar_names = _get_covar_names(effect_funcs)
+    model = fix_parameters(model, covar_names)
+
+    # modelfit = fit(model, path="null_model")
+    # null_me = ModelEntry.create(model=model, modelfit_results=modelfit, parent=None)
+
+    null_me = ModelEntry.create(model=model, parent=None)
+    fit_workflow = create_fit_workflow(modelentries=[null_me])
+    null_me = context.call_workflow(fit_workflow, "fit_null_model")
+    return null_me
+
+
+def _process_effect_funcs(effect_funcs):
+    score_effect_funcs = {
+        cov_effect: partial(score_test_add_covariate_effect, *cov_func.args, **cov_func.keywards)
+        for cov_effect, cov_func in effect_funcs.items()
+    }
+    return score_effect_funcs
+
+
+def _get_covar_names(effect_funcs):
+    covar_names = [f"POP_{cov[0]}{cov[1]}" for cov in effect_funcs.keys()]
+    return covar_names
+
+
+def score_step(context, state_and_effect, rank) -> ScoreSearchState:
+    effect_funcs = state_and_effect.effect_funcs
+    search_state = state_and_effect.search_state
+    null_me = search_state.best_candidate_so_far.modelentry
+
+    results = []
+    effect_fetcher, score_fetcher = {}, {}
+    score_input = _prepare_test_input(context, null_me, effect_funcs)
+    combinations = _get_combination(score_input.num_covars)
+
+    for comb in combinations:
+        score_result, inclusion, exclusion_idx = run_score_test(comb, score_input)
+        results.append(
+            [
+                inclusion,
+                score_result.stat,
+                score_result.pval,
+                score_result.penalized_stat,
+            ]
+        )
+        assert exclusion_idx.size >= 0
+        effect_subset = dict(
+            item for i, item in enumerate(effect_funcs.items()) if i in exclusion_idx
+        )
+        effect_fetcher[inclusion] = effect_subset
+        score_fetcher[inclusion] = score_result.penalized_stat
+
+    rank = min(len(score_fetcher), rank) if rank else len(score_fetcher)
+    teststep_res = StepResult(rank, results, score_fetcher, effect_fetcher)
+    print(teststep_res.processed_result())
+    search_state = replace(search_state, aux=teststep_res)
+    return search_state
+
+
+def run_score_test(comb, score_input):
+    if not isinstance(comb, np.ndarray):
+        comb = np.array(comb)
+    exclusion_idx = np.where(comb == 0)[0]
+    inclusion_idx = np.where(comb == 1)[0]
+    num_params = score_input.num_params - len(exclusion_idx)
+
+    if len(exclusion_idx) >= 0:
+        sub_scores = score_input.scores[inclusion_idx].reshape(-1, 1)
+        sub_covmat = score_input.covmat[np.ix_(inclusion_idx, inclusion_idx)]
+        score_result = ScoreTest(sub_scores, sub_covmat, num_params, score_input.num_obs).result()
+
+    else:
+        score_result = TestResult(np.nan, 1, np.nan)
+
+    inclusion = ",".join(map(str, inclusion_idx))
+    return score_result, inclusion, exclusion_idx
+
+
+def _get_combination(num_covars: int, min_inclusion: bool = True):
+    if min_inclusion:
+        return np.eye(num_covars)
+    else:
+        return product([0, 1], repeat=num_covars)
+
+
+def _prepare_test_input(context, null_modelentry, effect_fucns) -> ScoreInput:
+    model = null_modelentry.model
+    modelfit = null_modelentry.modelfit_results
+    covar_names = _get_covar_names(effect_fucns)
+    num_covars = len(covar_names)
+
+    # get gradients and covariance matrix
+    model = update_initial_estimates(model, modelfit)
+    model = unfix_parameters(model, covar_names)
+    model = set_estimation_step(model, method="IMP", idx=0, auto=True, tool_options={"EONLY": "1"})
+    score_model = model.replace(name="score_model", description="score_model")
+    score_me = ModelEntry.create(model=score_model, parent=None)
+    fit_workflow = create_fit_workflow(modelentries=[score_me])
+    score_me = context.call_workflow(fit_workflow, "fit_score_model")
+
+    scores = score_me.modelfit_results.gradients.loc[covar_names].values
+    covmat = score_me.modelfit_results.covariance_matrox.loc[covar_names, covar_names].values
+
+    # get number of parameters and observations
+    thetas = get_thetas(score_model).nonfixed.symbols
+    num_thetas = len(thetas)
+    num_obs = len(get_observations(score_model))
+
+    return ScoreInput(scores, covmat, num_params=num_thetas, num_covars=num_covars, num_obs=num_obs)
+
+
+def score_nonlinear_model_selection(context, step, search_state, p_forward):
+    best_me = search_state.best_candidate_so_far.modelentry
+    best_bic = calculate_bic(best_me.model, best_me.modelfit_results.ofv, "mixed")
+    score_result = search_state.aux
+    assert isinstance(score_result, StepResult)
+
+    # prepare nonlinear model selection
+    new_effect_funcs, new_models, candidate_steps = {}, {}, {}
+    new_modelentries = []
+    score_fetcher = score_result.sort_score_fetcher()
+    rank = score_result.rank
+    effect_fetcher = score_result.effect_fetcher
+
+    for r in range(rank):
+        inc = score_fetcher[r][0]
+        selection = effect_fetcher[inc]
+        model = best_me.model
+        desc = model.description
+        cand_steps = ()
+
+        for cov_effect in selection.keys():
+            cov_name = _get_covar_names(cov_effect)
+            model = unfix_parameters(model, cov_name)
+            desc = desc + f";({'-'.join(cov_effect[:3])})"
+            cand_steps += (ForwardStep(p_forward, DummyEffect(*cov_effect)),)
+        model = model.replace(name=f"score_step{step}_rank#{r + 1}", description=desc)
+
+        candidate_steps[inc] = cand_steps
+        updated_modelentry = ModelEntry.create(model=model, parent=best_me)
+        new_models[inc] = model
+        new_modelentries.append(updated_modelentry)
+
+    fit_wf = create_fit_workflow(modelentries=new_modelentries)
+    wb = WorkflowBuilder(fit_wf)
+    task_gather = Task("gather", lambda *models: models)
+    wb.add_task(task_gather, predecessors=wb.output_tasks)
+    new_modelentries = context.call_workflow(Workflow(wb), "fit_nonlinear_models")
+
+    model_map = {me.model: me for me in new_modelentries}
+    new_mes = {inc: model_map[model] for inc, model in new_models.items() if model in model_map}
+    nonlin_bic = {
+        inc: calculate_bic(me.model, me.modelfit_results.ofv, "mixed")
+        for inc, me in new_mes.items()
+    }
+    candidates = {inc: Candidate(me, candidate_steps[inc]) for inc, me in new_mes.items()}
+    search_state.all_candidates_so_far.extend(candidates.values())
+
+    best_candidate_key = min(nonlin_bic, key=lambda x: nonlin_bic[x])
+    if nonlin_bic[best_candidate_key] < best_bic:
+        search_state = replace(search_state, best_candidate_so_far=candidates[best_candidate_key])
+        # remaining covariate effects
+        new_effect_funcs = effect_fetcher[best_candidate_key]
+
+    return search_state, new_effect_funcs
