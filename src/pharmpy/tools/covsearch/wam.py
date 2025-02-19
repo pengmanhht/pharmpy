@@ -386,7 +386,7 @@ def wam_backward(
     steps = range(1, max_steps + 1) if max_steps >= 1 else count(1)
     for step in steps:
         # Wald Approximation
-        search_state = wam_approx(
+        search_state = wam_step(
             context,
             state_and_effect,
             rank,
@@ -409,7 +409,7 @@ def wam_backward(
     return search_state
 
 
-def wam_step(
+def run_wald_test(
     combination: np.ndarray,
     covariance_matrix: np.ndarray,
     covariate_thetas: np.ndarray,
@@ -432,7 +432,7 @@ def wam_step(
     return wald_result, inclusion, inclusion_idx
 
 
-def wam_approx(
+def wam_step(
     context,
     state_and_effect,
     rank,
@@ -450,7 +450,7 @@ def wam_approx(
     # reassign rank value
     rank = min(combinations.shape[0], rank) if rank else combinations.shape[0]
     for comb in combinations:
-        wald_result, inclusion, inclusion_idx = wam_step(
+        wald_result, inclusion, inclusion_idx = run_wald_test(
             comb,
             wald_inputs.covariance_matrix,
             wald_inputs.covariate_estimates,
@@ -545,11 +545,11 @@ def wam_nonlinear_model_selection(
         for cov_effect, cov_func in selection.items():
             updated_model = cov_func(updated_model)
             desc = desc + f";({'-'.join(cov_effect[:3])})"
-            updated_model = updated_model.replace(
-                name=f"wam_step{step}_rank#{r + 1}", description=desc
-            )
-            updated_model = add_parameter_uncertainty_step(updated_model, "RMAT")
             steps += (WAMStep(p_backward, DummyEffect(*cov_effect)),)
+        updated_model = updated_model.replace(
+            name=f"wam_step{step}_rank#{r + 1}", description=desc
+        )
+        updated_model = add_parameter_uncertainty_step(updated_model, "RMAT")
 
         # fit the updated_model
         candidate_steps[inc] = steps
