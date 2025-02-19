@@ -77,11 +77,10 @@ from pharmpy.tools.covsearch.util import (
 from pharmpy.tools.mfl.parse import ModelFeatures
 from pharmpy.tools.modelfit import create_fit_workflow
 from pharmpy.tools.run import (
-    Workflow,
     summarize_errors_from_entries,
     summarize_modelfit_results_from_entries,
 )
-from pharmpy.workflows import ModelEntry, Task, WorkflowBuilder
+from pharmpy.workflows import ModelEntry, Task, Workflow, WorkflowBuilder
 from pharmpy.workflows.results import ModelfitResults
 
 
