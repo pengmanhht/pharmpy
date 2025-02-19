@@ -320,7 +320,7 @@ def set_wam_estimation_step(model):
     # Alternatives: FOCE + $COV or IMP + $COV
     model = remove_estimation_step(model, 0)
 
-    # ITS step
+    # ITS + SAEM step
     model = add_estimation_step(
         model,
         method="ITS",
@@ -329,7 +329,6 @@ def set_wam_estimation_step(model):
         auto=True,
         niter=5,
     )
-    # SAEM step
     model = add_estimation_step(
         model,
         method="SAEM",
@@ -342,27 +341,6 @@ def set_wam_estimation_step(model):
         tool_options={"NOABORT": 0},
     )
 
-    # IMP step
-    # model = add_estimation_step(
-    #     model,
-    #     method="IMP",
-    #     idx=1,
-    #     interaction=True,
-    #     niter=100,
-    #     auto=True,
-    #     isample=1000,
-    #     tool_options={"NOABORT": 0},
-    # )
-    # FOCE step
-    # model = add_estimation_step(
-    #     model,
-    #     method="FOCE",
-    #     idx=0,
-    #     interaction=True,
-    #     auto=True,
-    #     maximum_evaluations=99999,
-    #     tool_options={"NOABORT": 0},
-    # )
     # COV step
     model = add_parameter_uncertainty_step(model, "RMAT")
 
