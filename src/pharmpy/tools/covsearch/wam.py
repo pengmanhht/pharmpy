@@ -28,14 +28,16 @@ Reference:
     Kowalski KG, Hutmacher MM. Efficient Screening of Covariates in Population Models Using
         Wald’s Approximation to the Likelihood Ratio Test. J Pharmacokinet Pharmacodyn.
         2001 Jun 1;28(3):253–75.
+    Zou Y, Tang F, Ng CM. A Modified Hybrid Wald’s Approximation Method for Efficient Covariate
+        Selection in Population Pharmacokinetic Analysis. AAPS J. 2021 Mar;23(2):37.
 
 wam_workflow
     |- wam_init_state_and_effect
     |   |- get_effect_funcs_and_start_model
     |   |- prepare_wam_full_model
     |- wam_backward
-    |   |- wam_approx
-    |   |   |- wald_test
+    |   |- wam_step
+    |   |   |- run_wald_test
     |   |- nonlinear_model_selection_step
     |- results
 """
