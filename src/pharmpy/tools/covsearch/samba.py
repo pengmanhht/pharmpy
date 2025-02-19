@@ -1138,7 +1138,7 @@ def _lrt(parent, child, nsamples, linreg_method):
     else:
         raise TypeError(f"Unsupported modelfit type: {type(parent)}")
 
-    lrt_pval = stats.chi2.sf(lrt_dofv, lrt_df)[0]
+    lrt_pval = stats.chi2.sf(lrt_dofv, lrt_df)
 
     return lrt_dofv, lrt_pval
 
