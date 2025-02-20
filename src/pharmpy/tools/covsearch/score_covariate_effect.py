@@ -17,7 +17,6 @@ from pharmpy.deps import sympy
 from pharmpy.internals.expr.parse import parse as parse_expr
 from pharmpy.internals.expr.subs import subs
 from pharmpy.model import Assignment, Model, Parameter, Parameters, Statement, Statements
-
 from pharmpy.modeling.common import get_model_covariates
 from pharmpy.modeling.data import get_baselines
 from pharmpy.modeling.expressions import (
