@@ -427,7 +427,7 @@ def wam_step(
     wald_inputs = prepare_wald_inputs(full_modelentry, effect_funcs)
     combinations = np.array(list(product([0, 1], repeat=wald_inputs.num_covariates)))
     # reassign rank value
-    rank = min(combinations.shape[0], rank) if rank else combinations.shape[0]
+
     for comb in combinations:
         wald_result, inclusion, inclusion_idx = run_wald_test(
             comb,
@@ -452,6 +452,7 @@ def wam_step(
             effect_func_fetcher[inclusion] = effect_funcs_subset
             score_fetcher[inclusion] = wald_result.penalized_stat
 
+    rank = min(len(score_fetcher), rank) if rank else len(score_fetcher)
     wam_result = WAMResult(rank, results, score_fetcher, effect_func_fetcher)
     search_state = replace(search_state, wam_result=wam_result)
 
