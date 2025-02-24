@@ -38,8 +38,8 @@ from pharmpy.modeling import (
     add_parameter_uncertainty_step,
     calculate_bic,
     fix_parameters,
-    get_thetas,
     get_observations,
+    get_thetas,
     remove_estimation_step,
     set_estimation_step,
     unfix_parameters,
@@ -471,7 +471,7 @@ def score_nonlinear_model_selection(context, step, search_state, effect_funcs, p
     candidates = {inc: Candidate(me, candidate_steps[inc]) for inc, me in new_mes.items()}
     search_state.all_candidates_so_far.extend(candidates.values())
 
-    best_candidate_key = min(nonlin_bic, key=lambda x: nonlin_bic[x])
+    best_candidate_key = min(nonlin_bic, key=lambda x: nonlin_bic[x] if not np.isnan(nonlin_bic[x]) else np.inf)
     if nonlin_bic[best_candidate_key] < best_bic:
         search_state = replace(search_state, best_candidate_so_far=candidates[best_candidate_key])
         remaining_effect_funcs = {
