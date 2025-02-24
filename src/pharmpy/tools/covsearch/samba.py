@@ -54,7 +54,11 @@ from pharmpy.tools.mfl.feature.covariate import parse_spec, spec
 from pharmpy.tools.mfl.helpers import all_funcs
 from pharmpy.tools.mfl.parse import ModelFeatures, get_model_features
 from pharmpy.tools.modelfit import create_fit_workflow
-from pharmpy.tools.run import summarize_errors_from_entries, summarize_modelfit_results_from_entries
+from pharmpy.tools.run import (
+    is_strictness_fulfilled,
+    summarize_errors_from_entries,
+    summarize_modelfit_results_from_entries,
+)
 from pharmpy.tools.scm.results import ofv_summary_dataframe
 from pharmpy.workflows import ModelEntry, Task, Workflow, WorkflowBuilder
 from pharmpy.workflows.results import ModelfitResults
@@ -153,6 +157,7 @@ def samba_workflow(
         algorithm,
         stepwise_lcs,
         nonmem_lcs,
+        strictness,
     )
     wb.add_task(samba_search_task, predecessors=init_task)
     search_output = wb.output_tasks
@@ -183,6 +188,7 @@ def samba_forward(
     algorithm,
     stepwise_lcs,
     nonmem_lcs,
+    strictness,
     state_and_effect,
 ):
     if algorithm == "scm-lcs" and linreg_method in ["ols", "wls"] and nsamples != 1:
@@ -224,7 +230,7 @@ def samba_forward(
             )
         else:  # algorithm == 'scm-lcs'
             search_state = scmlcs_nonlinear_model_selection(
-                context, step, selection_criterion, lrt_alpha, state_and_effect
+                context, step, selection_criterion, lrt_alpha, strictness, state_and_effect
             )
         if search_state is state_and_effect.search_state:
             break
@@ -673,7 +679,7 @@ def _stepwise_linear_covariate_selection(
             model_records.append(model_record)
 
         # select the best candidate
-        best_candidate = min(scores, key=scores.get)
+        best_candidate = min(scores, key=lambda x: scores[x] if not np.nan(scores[x]) else np.inf)
         if (selection_criterion == "bic" and scores[best_candidate] < best_bic) or (
             selection_criterion == "lrt" and scores[best_candidate] < lrt_alpha
         ):
@@ -872,7 +878,7 @@ def _nonmem_stepwise_linear_covariate_selection(
             model_records.append(model_res)
 
         # select covariates
-        best_candidate = min(scores, key=scores.get)
+        best_candidate = min(scores, key=lambda x: scores[x] if not np.nan(scores[x]) else np.inf)
         if (selection_criterion == "bic" and scores[best_candidate] < best_bic) or (
             selection_criterion == "lrt" and scores[best_candidate] < lrt_alpha
         ):
@@ -1246,7 +1252,7 @@ def samba_nonlinear_model_selection(
 
 
 def scmlcs_nonlinear_model_selection(
-    context, step, selection_criterion, lrt_alpha, state_and_effect
+    context, step, selection_criterion, lrt_alpha, strictness, state_and_effect
 ):
     """Perform nonlinear model selection for SCM-LCS using either BIC or LRT criteria"""
     # unpack state_and_effect
@@ -1289,21 +1295,14 @@ def scmlcs_nonlinear_model_selection(
         if model in model_map
     }
 
-    scores = {
-        cov_effect: (
-            _nonlinear_step_lrt(best_candidate.modelentry, me).lrt_pval
-            if selection_criterion == "lrt"
-            else calculate_bic(me.model, me.modelfit_results.ofv, "mixed")
-        )
-        for cov_effect, me in new_mes.items()
-    }
+    scores = _get_scores(best_candidate, new_mes, selection_criterion, strictness)
 
     new_candidates = {
         cov_effect: Candidate(me, candidate_steps[cov_effect]) for cov_effect, me in new_mes.items()
     }
     search_state.all_candidates_so_far.extend(new_candidates.values())
 
-    best_candidate_key = min(scores, key=scores.get)
+    best_candidate_key = min(scores, key=lambda x: scores[x] if not np.isnan(scores[x]) else np.inf)
     if (selection_criterion == "bic" and scores[best_candidate_key] < best_bic) or (
         selection_criterion == "lrt" and scores[best_candidate_key] < lrt_alpha
     ):
@@ -1365,6 +1364,20 @@ def _prune_effect_funcs(effect_funcs, updated_model, step, context):
         )
 
     return pruned_effects
+
+
+def _get_scores(best_candidate, new_modelentries, selection_criterion, strictness):
+    scores = {}
+    for cov_effect, me in new_modelentries.items():
+        if is_strictness_fulfilled(me.model, me.modelfit_results, strictness):
+            scores[cov_effect] = (
+                _nonlinear_step_lrt(best_candidate.modelentry, me).lrt_pval
+                if selection_criterion == "lrt"
+                else calculate_bic(me.model, me.modelfit_results.ofv, "mixed")
+            )
+        else:
+            scores[cov_effect] = np.nan
+    return scores
 
 
 # ============ Results =================
