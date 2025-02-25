@@ -679,7 +679,7 @@ def _stepwise_linear_covariate_selection(
             model_records.append(model_record)
 
         # select the best candidate
-        best_candidate = min(scores, key=lambda x: scores[x] if not np.nan(scores[x]) else np.inf)
+        best_candidate = min(scores, key=lambda x: scores[x] if not np.isnan(scores[x]) else np.inf)
         if (selection_criterion == "bic" and scores[best_candidate] < best_bic) or (
             selection_criterion == "lrt" and scores[best_candidate] < lrt_alpha
         ):
@@ -878,7 +878,7 @@ def _nonmem_stepwise_linear_covariate_selection(
             model_records.append(model_res)
 
         # select covariates
-        best_candidate = min(scores, key=lambda x: scores[x] if not np.nan(scores[x]) else np.inf)
+        best_candidate = min(scores, key=lambda x: scores[x] if not np.isnan(scores[x]) else np.inf)
         if (selection_criterion == "bic" and scores[best_candidate] < best_bic) or (
             selection_criterion == "lrt" and scores[best_candidate] < lrt_alpha
         ):
@@ -1359,8 +1359,7 @@ def _prune_effect_funcs(effect_funcs, updated_model, step, context):
     }
     if not pruned_effects:
         context.log_info(
-            f"STEP {step} | NONLINEAR MODEL SELECTION\n"
-            f"     No valid covariate effects to update."
+            f"STEP {step} | NONLINEAR MODEL SELECTION\n     No valid covariate effects to update."
         )
 
     return pruned_effects
