@@ -223,6 +223,7 @@ class WAMResult:
 
 @dataclass
 class WAMSearchState(SearchState):
+    wam_full: Model
     wam_result: Optional[WAMResult] = None
 
     def __eq__(self, other):
@@ -276,14 +277,11 @@ def wam_init_state_and_effect(context, search_space, input_modelentry):
     effect_funcs, filtered_model = samba_effect_funcs_and_start_model(search_space, model)
     assert filtered_model is not None
 
-    # set wam estimation step (ITS + SAEM + COV step)
-    filtered_model = set_wam_estimation_step(filtered_model)
-
     # create input modelentry (filtered_model)
     input_me = ModelEntry.create(model=filtered_model)
 
     # prepare full model (call fit workflow inside the function)
-    full_me = prepare_wam_full_model(context, filtered_model, effect_funcs)
+    full_me, _ful_me = prepare_wam_full_model(context, filtered_model, effect_funcs)
 
     # init candiate
     candidate = Candidate(full_me, steps=())
@@ -294,31 +292,46 @@ def wam_init_state_and_effect(context, search_space, input_modelentry):
         start_modelentry=full_me,
         best_candidate_so_far=candidate,
         all_candidates_so_far=[candidate],
+        wam_full=_ful_me,
     )
 
     return StateAndEffect(search_state=search_state, effect_funcs=effect_funcs)
 
 
 def prepare_wam_full_model(context, model, effect_funcs):
+    """
+    prepare full model for wam covsearch
+     full_model: model with all covariate effects, fitted with SAEM + IMP for robust OFV
+     _ful_model: model for wam step
+    """
     # add covariate effects
     desc = "full_model"
     for covfuncs in effect_funcs.values():
         model = covfuncs(model)
     full_model = model.replace(name="full_model", description=desc)
+    full_model, _ful_model = set_wam_estimation_step(full_model)
 
-    # fit full model
+    # fit full models
     full_me = ModelEntry.create(model=full_model, parent=None)
-    fit_workflow = create_fit_workflow(modelentries=[full_me])
-    full_me = context.call_workflow(fit_workflow, "fit_full_model")
+    _ful_me = ModelEntry.create(model=_ful_model, parent=None)
+    full_me, _ful_me = _fit_many(context, [full_me, _ful_me])
 
-    return full_me
+    return full_me, _ful_me
+
+
+def _fit_many(context, modelentries):
+    # assuming the return order is the same as the input order
+    fit_wf = create_fit_workflow(modelentries=modelentries)
+    wb = WorkflowBuilder(fit_wf)
+    task_gather = Task("gather", lambda *models: models)
+    wb.add_task(task_gather, predecessors=wb.output_tasks)
+    return context.call_workflow(Workflow(wb), "fit_nonlinear_models")
 
 
 def set_wam_estimation_step(model):
-    # NOTE: SAEM guarantees to covariance matrix
-    # but can also be problematic in terms of runtime and stochastic OFV values
-    # Alternatives: FOCE + $COV or IMP + $COV
-    model = remove_estimation_step(model, 0)
+    # model for robust OFV, whereas _model for covariance matrix
+    for i in range(len(model.execution_steps)):
+        model = remove_estimation_step(model, i)
 
     # ITS + SAEM step
     model = add_estimation_step(
@@ -342,9 +355,20 @@ def set_wam_estimation_step(model):
     )
 
     # COV step
-    model = add_parameter_uncertainty_step(model, "RMAT")
+    _model = add_parameter_uncertainty_step(model, "RMAT")
+    _model = _model.replace(name="wam_" + model.name)
 
-    return model
+    # full model
+    model = add_estimation_step(
+        model,
+        method="IMP",
+        idx=2,
+        interaction=True,
+        niter=20,
+        isample=1000,
+        tool_options={"EONLY": "1"},
+    )
+    return model, _model
 
 
 def _get_covar_names(effect_funcs):
