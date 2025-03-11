@@ -296,6 +296,27 @@ def set_score_estimation_step(model):
         },
     )
 
+    # ITS + SAEM step
+    # model = add_estimation_step(
+    #     model,
+    #     method="ITS",
+    #     idx=0,
+    #     interaction=True,
+    #     auto=True,
+    #     niter=5,
+    # )
+    # model = add_estimation_step(
+    #     model,
+    #     method="SAEM",
+    #     idx=1,
+    #     interaction=True,
+    #     niter=200,
+    #     auto=True,
+    #     isample=2,
+    #     keep_every_nth_iter=50,
+    #     tool_options={"NOABORT": 0},
+    # )
+
     model = add_parameter_uncertainty_step(model, "RMAT")
 
     return model
@@ -311,9 +332,6 @@ def prepare_null_model(context, model, effect_funcs):
     # fix covaraite effect parameters
     covar_names = _get_covar_names(effect_funcs)
     model = fix_parameters(model, covar_names)
-
-    # modelfit = fit(model, path="null_model")
-    # null_me = ModelEntry.create(model=model, modelfit_results=modelfit, parent=None)
 
     null_me = ModelEntry.create(model=model, parent=None)
     fit_workflow = create_fit_workflow(modelentries=[null_me])
@@ -363,7 +381,6 @@ def score_step(context, state_and_effect, rank, step) -> ScoreSearchState:
                 score_result.penalized_stat,
             ]
         )
-
     rank = min(len(score_fetcher), rank) if rank else len(score_fetcher)
     # NOTE: aux table's lines may scale up as search_space increases
     teststep_res = StepResult(rank, results, score_fetcher, effect_fetcher)
@@ -471,7 +488,9 @@ def score_nonlinear_model_selection(context, step, search_state, effect_funcs, p
     candidates = {inc: Candidate(me, candidate_steps[inc]) for inc, me in new_mes.items()}
     search_state.all_candidates_so_far.extend(candidates.values())
 
-    best_candidate_key = min(nonlin_bic, key=lambda x: nonlin_bic[x] if not np.isnan(nonlin_bic[x]) else np.inf)
+    best_candidate_key = min(
+        nonlin_bic, key=lambda x: nonlin_bic[x] if not np.isnan(nonlin_bic[x]) else np.inf
+    )
     if nonlin_bic[best_candidate_key] < best_bic:
         search_state = replace(search_state, best_candidate_so_far=candidates[best_candidate_key])
         remaining_effect_funcs = {

@@ -44,7 +44,7 @@ wam_workflow
 
 from collections import Counter
 from dataclasses import astuple, dataclass, replace
-from itertools import count, product
+from itertools import product
 from typing import Optional, Union
 
 from pharmpy.deps import numpy as np
@@ -180,12 +180,12 @@ class WaldResult:
 
 
 @dataclass
-class WaldInputs:
-    num_observations: int
-    num_thetas: int
-    num_covariates: int
-    covariate_estimates: np.ndarray
-    covariance_matrix: np.ndarray
+class WaldInput:
+    thetas: np.ndarray  # covariate coefficient estimates
+    covmat: np.ndarray  # covariance matrix
+    num_obs: int
+    num_thetas: int  # number of all thetas
+    num_covars: int  # number of covariate parameters
 
 
 class BackwardStep(Step):
@@ -241,7 +241,6 @@ def wam_workflow(
     search_space: Union[str, ModelFeatures],
     p_backward: float = 0.05,
     rank: int = 3,
-    max_steps: int = -1,
     strictness: str = "",
 ):
     wb = WorkflowBuilder(name="covsearch")
@@ -258,7 +257,6 @@ def wam_workflow(
         "wam_search",
         wam_backward,
         rank,
-        max_steps,
         p_backward,
     )
     wb.add_task(wam_search_task, predecessors=init_task)
@@ -379,54 +377,36 @@ def _get_covar_names(effect_funcs):
 def wam_backward(
     context,
     rank: Optional[int],
-    max_steps: int,
     p_backward: float,
     state_and_effect: StateAndEffect,
 ):
-    effect_funcs = state_and_effect.effect_funcs
-    search_state = state_and_effect.search_state
+    # Wald Approximation
+    search_state = wam_step(
+        context,
+        state_and_effect,
+        rank,
+    )
 
-    steps = range(1, max_steps + 1) if max_steps >= 1 else count(1)
-    for step in steps:
-        # Wald Approximation
-        search_state = wam_step(
-            context,
-            state_and_effect,
-            rank,
-        )
-
-        search_state, effect_funcs = wam_nonlinear_model_selection(
-            context, step, search_state, p_backward
-        )
-
-        if search_state is state_and_effect.search_state:
-            break
-        else:
-            state_and_effect = replace(state_and_effect, search_state=search_state)
-
-        if not effect_funcs:
-            break
-        else:
-            state_and_effect = replace(state_and_effect, effect_funcs=effect_funcs)
-
+    search_state = wam_nonlinear_model_selection(context, search_state, p_backward)
     return search_state
 
 
 def run_wald_test(
-    combination: np.ndarray,
-    covariance_matrix: np.ndarray,
-    covariate_thetas: np.ndarray,
-    num_thetas: int,
-    num_obs: int,
+    combination,
+    wald_input,
 ):
+    if not isinstance(combination, np.ndarray):
+        combination = np.array(combination)
     exclusion_idx = np.where(combination == 0)[0]
     inclusion_idx = np.where(combination == 1)[0]
-    num_params = num_thetas - len(exclusion_idx)
+    num_params = wald_input.num_thetas - len(exclusion_idx)
 
     if len(exclusion_idx) >= 0:
-        sub_covmat = covariance_matrix[np.ix_(exclusion_idx, exclusion_idx)]
-        sub_thetas = covariate_thetas[exclusion_idx].reshape(-1, 1)
-        wald_result = WaldTest(sub_thetas, sub_covmat, num_params, num_obs).wald_results()
+        sub_thetas = wald_input.thetas[exclusion_idx].reshape(-1, 1)
+        sub_covmat = wald_input.covmat[np.ix_(exclusion_idx, exclusion_idx)]
+        wald_result = WaldTest(
+            sub_thetas, sub_covmat, num_params, wald_input.num_obs
+        ).wald_results()
     else:
         wald_result = WaldResult(np.inf, 1.0, np.inf)
 
@@ -442,24 +422,17 @@ def wam_step(
 ) -> WAMSearchState:
     effect_funcs = state_and_effect.effect_funcs
     search_state = state_and_effect.search_state
-    full_modelentry = search_state.best_candidate_so_far.modelentry
+    wam_full = search_state.wam_full
 
     results = []
     effect_func_fetcher, score_fetcher = {}, {}
 
     # wald approximation
-    wald_inputs = prepare_wald_inputs(full_modelentry, effect_funcs)
-    combinations = np.array(list(product([0, 1], repeat=wald_inputs.num_covariates)))
-    # reassign rank value
+    wald_input = prepare_wald_input(wam_full, effect_funcs)
+    combinations = product([0, 1], repeat=wald_input.num_covars)
 
     for comb in combinations:
-        wald_result, inclusion, inclusion_idx = run_wald_test(
-            comb,
-            wald_inputs.covariance_matrix,
-            wald_inputs.covariate_estimates,
-            wald_inputs.num_thetas,
-            wald_inputs.num_observations,
-        )
+        wald_result, inclusion, inclusion_idx = run_wald_test(comb, wald_input)
         results.append(
             [
                 inclusion,
@@ -489,7 +462,7 @@ def _wam_loginfo(context, results, rank):
     context.log_info(f"WAM MODEL SELECTION\n {results.head(5 if rank < 5 else rank)}")
 
 
-def prepare_wald_inputs(modelentry: ModelEntry, effect_funcs: dict) -> WaldInputs:
+def prepare_wald_input(modelentry: ModelEntry, effect_funcs: dict) -> WaldInput:
     """
     prepare inputs for Wald test
     """
@@ -512,91 +485,104 @@ def prepare_wald_inputs(modelentry: ModelEntry, effect_funcs: dict) -> WaldInput
         covar_names, covar_names
     ].values
 
-    return WaldInputs(
-        num_observations=num_obs,
+    return WaldInput(
+        thetas=covtheta_values,
+        covmat=covarmat_values,
+        num_obs=num_obs,
         num_thetas=num_thetas,
-        num_covariates=num_covars,
-        covariate_estimates=covtheta_values,
-        covariance_matrix=covarmat_values,
+        num_covars=num_covars,
     )
 
 
 def wam_nonlinear_model_selection(
     context,
-    step,
     search_state: WAMSearchState,
     p_backward: float,
 ) -> tuple:
     best_me = search_state.best_candidate_so_far.modelentry
     best_bic = calculate_bic(best_me.model, best_me.modelfit_results.ofv, "mixed")
     wam_result = search_state.wam_result
-    assert isinstance(wam_result, WAMResult)
+    assert isinstance(wam_result, WAMResult), "Expected WAMResult instance"
 
-    # prepare nonlinear model selection
-    new_effect_funcs, new_models, candidate_steps = {}, {}, {}
+    # GENERATE CANDIDATE MODELS
+    candidate_steps = []
     new_modelentries = []
+
     score_fetcher = wam_result.sorted_score_fetcher
-    rank = wam_result.rank
     effect_func_fetcher = wam_result.effect_func_fetcher
 
-    for r in range(rank):
+    for r in range(wam_result.rank):
+        # get the effect functions for the r-th rank
         inc = score_fetcher[r][0]
         selection = effect_func_fetcher[inc]
-        updated_model = search_state.user_input_modelentry.model  # filtered model
+
+        # start with the base model
+        updated_model = search_state.user_input_modelentry.model
         desc = updated_model.description
-        # steps = search_state.best_candidate_so_far.steps
         steps = ()
+
+        # apply the effect functions to the base model
         for cov_effect, cov_func in selection.items():
             updated_model = cov_func(updated_model)
             desc = desc + f";({'-'.join(cov_effect[:3])})"
             steps += (WAMStep(p_backward, DummyEffect(*cov_effect)),)
-        updated_model = updated_model.replace(name=f"wam_step{step}_rank#{r + 1}", description=desc)
-        updated_model = add_parameter_uncertainty_step(updated_model, "RMAT")
+
+        # update model metadata
+        updated_model = updated_model.replace(name=f"wam_rank#{r + 1}", description=desc)
+        updated_model, _ = set_wam_estimation_step(updated_model)
 
         # fit the updated_model
-        candidate_steps[inc] = steps
+        candidate_steps.append(steps)
         updated_modelentry = ModelEntry.create(
             model=updated_model,
-            # full model as parent
             parent=search_state.best_candidate_so_far.modelentry.model,
         )
-        new_models[inc] = updated_model
+
         new_modelentries.append(updated_modelentry)
+    fitted_modelentries = _fit_many(context, new_modelentries)
 
-    fit_wf = create_fit_workflow(modelentries=new_modelentries)
-    wb = WorkflowBuilder(fit_wf)
-    task_gather = Task("gather", lambda *models: models)
-    wb.add_task(task_gather, predecessors=wb.output_tasks)
-    new_modelentries = context.call_workflow(Workflow(wb), "fit_nonlinear_models")
+    # EVALUATE CANDIDATE MODELS
+    candidates = []
+    bic_values = []
 
-    model_map = {me.model: me for me in new_modelentries}
-    new_mes = {inc: model_map[model] for inc, model in new_models.items() if model in model_map}
-    nonlin_bic = {
-        inc: calculate_bic(me.model, me.modelfit_results.ofv, "mixed")
-        for inc, me in new_mes.items()
-    }
-    candidates = {inc: Candidate(me, candidate_steps[inc]) for inc, me in new_mes.items()}
-    search_state.all_candidates_so_far.extend(candidates.values())
+    for i, me in enumerate(fitted_modelentries):
+        # skip models that failed to fit properly
+        if me.modelfit_results is None:
+            continue
 
-    best_candidate_key = min(nonlin_bic, key=lambda x: nonlin_bic[x] if not np.isnan(nonlin_bic[x]) else np.inf)
-    if nonlin_bic[best_candidate_key] < best_bic:
-        search_state = replace(search_state, best_candidate_so_far=candidates[best_candidate_key])
-        new_effect_funcs = effect_func_fetcher[best_candidate_key]
+        # calculate BIC
+        bic = calculate_bic(me.model, me.modelfit_results.ofv, "mixed")
 
-    _wam_nonlin_loginfo(context, step, best_bic, nonlin_bic, wam_result)
+        # create candidate and store with its BIC value
+        candidate = Candidate(me, candidate_steps[i])
+        candidates.append(candidate)
+        bic_values.append((candidate, bic))
 
-    return search_state, new_effect_funcs
+    # register all candidates
+    search_state.all_candidates_so_far.extend(candidates)
+
+    # find the best candidate if any exist
+    valid_bics = [(candidate, bic) for candidate, bic in bic_values if not np.isnan(bic)]
+    if valid_bics:
+        # get the best candidate based on lowest BIC
+        best_candidate, best_cand_bic = min(valid_bics, key=lambda x: x[1])
+
+        # update the search state if finding a better model
+        if best_cand_bic < best_bic:
+            search_state = replace(search_state, best_candidate_so_far=best_candidate)
+
+    _wam_nonlin_loginfo(context, best_bic, bic_values, wam_result)
+
+    return search_state
 
 
-def _wam_nonlin_loginfo(context, step, best_bic, nonlin_bic, wam_result):
-    rank = wam_result.rank
+def _wam_nonlin_loginfo(context, best_bic, bic_values, wam_result):
     score_fetcher = wam_result.sorted_score_fetcher
 
-    log_info = [f"STEP{step} NONLINEAR MODEL RANK\n FULL MODEL: BIC {best_bic:.3f}\n"]
-    for r in range(rank):
-        inc = score_fetcher[r][0]
+    log_info = [f"NONLINEAR MODEL RANK\n FULL MODEL: BIC {best_bic:.3f}\n"]
+    for r in range(wam_result.rank):
         log_info.append(
-            f"    RANK#{r + 1}:\n   BIC {nonlin_bic[inc]:.3f} | Penalized Wald Stat {score_fetcher[r][1]:.3f}\n"
+            f"    RANK#{r + 1}:\n   BIC {bic_values[r][1]:.3f} | Penalized Wald Stat {score_fetcher[r][1]:.3f}\n"
         )
     context.log_info("\n".join(log_info))
 

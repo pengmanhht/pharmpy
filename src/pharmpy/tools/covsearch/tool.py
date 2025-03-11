@@ -147,6 +147,7 @@ def create_workflow(
     samba_linreg_method: Literal["ols", "wls", "lme"] = "ols",
     samba_stepwise_lcs: Optional[bool] = None,
     samba_nonmem_lcs: bool = True,
+    rank=3,
 ):
     """Run COVsearch tool. For more details, see :ref:`covsearch`.
 
@@ -195,6 +196,8 @@ def create_workflow(
         non-stepwise LCS.
     samba_nonmem_lcs: bool
         Use nonmem or statsmodels for linear covariate screening. Default is True (nonmem)
+    rank: int
+        Number of models to keep for wald test in WAM and score test in Score-based method. Default is 3.
 
     Returns
     -------
@@ -217,7 +220,7 @@ def create_workflow(
             search_space=search_space,
             p_forward=p_forward,
             max_steps=max_steps,
-            rank=1,
+            rank=rank,
             strictness=strictness,
         )
     if algorithm == "wam":
@@ -226,8 +229,7 @@ def create_workflow(
             results=results,
             search_space=search_space,
             p_backward=p_backward,
-            max_steps=max_steps,
-            rank=3,
+            rank=rank,
             strictness=strictness,
         )
     if algorithm in ["samba", "samba-foce", "scm-lcs"]:
