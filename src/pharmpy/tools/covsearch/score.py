@@ -41,7 +41,6 @@ from pharmpy.modeling import (
     get_observations,
     get_thetas,
     remove_estimation_step,
-    set_estimation_step,
     unfix_parameters,
 )
 from pharmpy.tools.common import (
@@ -277,57 +276,55 @@ def score_init_state_and_effect(context, search_space, input_modelentry):
     return StateAndEffect(search_state=search_state, effect_funcs=effect_funcs)
 
 
-def set_score_estimation_step(model):
-    model = remove_estimation_step(model, 0)
-    # use IMP for estimation
+def set_null_estimation_step(model):
+    for i in range(len(model.execution_steps)):
+        model = remove_estimation_step(model, i)
+
+    model = add_estimation_step(
+        model,
+        method="ITS",
+        idx=0,
+        interaction=True,
+        auto=True,
+        niter=5,
+    )
+    model = add_estimation_step(
+        model,
+        method="SAEM",
+        idx=1,
+        interaction=True,
+        niter=200,
+        auto=True,
+        isample=2,
+        keep_every_nth_iter=50,
+        tool_options={"NOABORT": 0},
+    )
+
     model = add_estimation_step(
         model,
         method="IMP",
-        idx=0,
+        idx=3,
         interaction=True,
-        niter=100,
+        niter=20,
         auto=True,
         isample=1000,
         tool_options={
-            "EONLY": "0",
+            "EONLY": "1",
             "NOABORT": 0,
             "CTYPE": "3",
             "RANMETHOD": "3S2",
         },
     )
 
-    # ITS + SAEM step
-    # model = add_estimation_step(
-    #     model,
-    #     method="ITS",
-    #     idx=0,
-    #     interaction=True,
-    #     auto=True,
-    #     niter=5,
-    # )
-    # model = add_estimation_step(
-    #     model,
-    #     method="SAEM",
-    #     idx=1,
-    #     interaction=True,
-    #     niter=200,
-    #     auto=True,
-    #     isample=2,
-    #     keep_every_nth_iter=50,
-    #     tool_options={"NOABORT": 0},
-    # )
-
-    model = add_parameter_uncertainty_step(model, "RMAT")
-
     return model
 
 
 def prepare_null_model(context, model, effect_funcs):
-    model = set_score_estimation_step(model)
+    model = set_null_estimation_step(model)
     score_effect_funcs = _process_effect_funcs(effect_funcs)
     for cov_func in score_effect_funcs.values():
         model = cov_func(model)
-    model = model.replace(name="null_model", description="null_model")
+    model = model.replace(name="null_model", description="start_model")
 
     # fix covaraite effect parameters
     covar_names = _get_covar_names(effect_funcs)
@@ -414,17 +411,33 @@ def _get_combination(num_covars: int, min_inclusion: bool = True):
     else:
         return product([0, 1], repeat=num_covars)
 
+def _set_score_estimation_step(model):
+    for i in range(len(model.execution_steps)):
+        model = remove_estimation_step(model, 0)
+
+    model = add_estimation_step(
+        model,
+        method="SAEM",
+        idx=0,
+        interaction=True,
+        niter=200,
+        auto=True,
+        isample=2,
+        keep_every_nth_iter=50,
+        tool_options={"NOABORT": 0, "EONLY": "1"},
+    )
+
+    model = add_parameter_uncertainty_step(model, "RMAT")
+    return model
 
 def _prepare_test_input(context, null_modelentry, effect_fucns, step) -> ScoreInput:
-    model = null_modelentry.model
-    modelfit = null_modelentry.modelfit_results
     covar_names = _get_covar_names(effect_fucns)
     num_covars = len(covar_names)
 
     # get gradients and covariance matrix
-    model = update_initial_estimates(model, modelfit)
+    model = update_initial_estimates(null_modelentry.model, null_modelentry.modelfit_results)
     model = unfix_parameters(model, covar_names)
-    model = set_estimation_step(model, method="IMP", idx=0, auto=True, tool_options={"EONLY": "1"})
+    model = _set_score_estimation_step(model)
     score_model = model.replace(name=f"score_step{step}", description=f"score_step{step}")
     score_me = ModelEntry.create(model=score_model, parent=None)
     fit_workflow = create_fit_workflow(modelentries=[score_me])

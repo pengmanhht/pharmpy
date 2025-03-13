@@ -329,7 +329,7 @@ def _fit_many(context, modelentries):
 def set_wam_estimation_step(model):
     # model for robust OFV, whereas _model for covariance matrix
     for i in range(len(model.execution_steps)):
-        model = remove_estimation_step(model, i)
+        model = remove_estimation_step(model, 0)
 
     # ITS + SAEM step
     model = add_estimation_step(
