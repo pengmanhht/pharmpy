@@ -56,6 +56,7 @@ from pharmpy.modeling import (
     add_parameter_uncertainty_step,
     calculate_bic,
     get_observations,
+    mu_reference_model,
     remove_estimation_step,
 )
 from pharmpy.modeling.parameters import get_thetas
@@ -327,6 +328,7 @@ def _fit_many(context, modelentries):
 
 
 def set_wam_estimation_step(model):
+    model = mu_reference_model(model)
     # model for robust OFV, whereas _model for covariance matrix
     for i in range(len(model.execution_steps)):
         model = remove_estimation_step(model, 0)

@@ -40,6 +40,7 @@ from pharmpy.modeling import (
     fix_parameters,
     get_observations,
     get_thetas,
+    mu_reference_model,
     remove_estimation_step,
     unfix_parameters,
 )
@@ -277,6 +278,7 @@ def score_init_state_and_effect(context, search_space, input_modelentry):
 
 
 def set_null_estimation_step(model):
+    model = mu_reference_model(model)
     for i in range(len(model.execution_steps)):
         model = remove_estimation_step(model, i)
 
