@@ -1,11 +1,13 @@
 from threading import Lock
 
 __all__ = (
-    'create_context',  # pyright: ignore [reportUnsupportedDunderAll]
+    'broadcast_log',  # pyright: ignore [reportUnsupportedDunderAll]
     'create_report',  # pyright: ignore [reportUnsupportedDunderAll]
     'fit',  # pyright: ignore [reportUnsupportedDunderAll]
+    'open_context',  # pyright: ignore [reportUnsupportedDunderAll]
     'is_strictness_fulfilled',  # pyright: ignore [reportUnsupportedDunderAll]
     'load_example_modelfit_results',  # pyright: ignore [reportUnsupportedDunderAll]
+    'list_models',  # pyright: ignore [reportUnsupportedDunderAll]
     'predict_influential_individuals',  # pyright: ignore [reportUnsupportedDunderAll]
     'predict_influential_outliers',  # pyright: ignore [reportUnsupportedDunderAll]
     'predict_outliers',  # pyright: ignore [reportUnsupportedDunderAll]
@@ -39,7 +41,6 @@ __all__ = (
 _allowed = set(__all__)
 
 _not_wrapped = {
-    '.amd.run': ('run_amd',),
     '.reporting': ('create_report',),
     '.run': (
         'fit',
@@ -59,10 +60,12 @@ _not_wrapped = {
         'predict_influential_outliers',
     ),
     '.context': (
-        'create_context',
+        'open_context',
         'print_log',
+        'broadcast_log',
         'retrieve_model',
         'retrieve_modelfit_results',
+        'list_models',
     ),
 }
 

@@ -63,12 +63,9 @@ class Context(ABC):
     @property
     def broadcaster(self) -> Broadcaster:
         if not hasattr(self, '_broadcaster'):
-            metadata = self.retrieve_metadata()
-            if (
-                'dispatching_options' in metadata
-                and 'broadcaster' in metadata['dispatching_options']
-            ):
-                name = metadata['dispatching_options']['broadcaster']
+            options = self.retrieve_dispatching_options()
+            if 'broadcaster' in options:
+                name = options['broadcaster']
             else:
                 from pharmpy import conf
 
@@ -79,18 +76,21 @@ class Context(ABC):
     @property
     def dispatcher(self) -> Dispatcher:
         if not hasattr(self, '_dispatcher'):
-            metadata = self.retrieve_metadata()
-            if (
-                'dispatching_options' in metadata
-                and 'dispatcher' in metadata['dispatching_options']
-            ):
-                name = metadata['dispatching_options']['dispatcher']
+            options = self.retrieve_dispatching_options()
+            if 'dispatcher' in options:
+                name = options['dispatcher']
             else:
                 from pharmpy import conf
 
                 name = conf.dispatcher
             self._dispatcher = Dispatcher.select_dispatcher(name)
         return self._dispatcher
+
+    @property
+    def seed(self) -> int:
+        if not hasattr(self, '_seed'):
+            self._seed = self.retrieve_metadata()['seed']
+        return self._seed
 
     @property
     @abstractmethod
@@ -126,6 +126,7 @@ class Context(ABC):
         Results
             Tool results object
         """
+        pass
 
     @abstractmethod
     def store_metadata(self, metadata: dict):
@@ -176,6 +177,11 @@ class Context(ABC):
         """Retrieve an annotation for a model"""
         pass
 
+    def get_ncores_for_execution(self):
+        """Get number of cores for execution (using available cores among allocation)"""
+        ncores = self.retrieve_dispatching_options()['ncores']
+        return self.dispatcher.get_available_cores(ncores)
+
     @abstractmethod
     def store_message(self, severity, ctxpath: str, date, message: str):
         pass
@@ -224,8 +230,17 @@ class Context(ABC):
         pass
 
     @abstractmethod
+    def retrieve_dispatching_options(self) -> dict[str, Any]:
+        pass
+
+    @abstractmethod
     def get_parent_context(self) -> Context:
         """Get the parent context of this context"""
+        pass
+
+    @abstractmethod
+    def get_top_level_context(self) -> Context:
+        """Get the top level context of this context"""
         pass
 
     @abstractmethod
@@ -236,6 +251,13 @@ class Context(ABC):
     @abstractmethod
     def create_subcontext(self, name: str) -> Context:
         """Create a new subcontext of this context"""
+        pass
+
+    @abstractmethod
+    def finalize(self):
+        """Called after a tool has finished its run in a context
+        can be implemented to do cleanup of the context
+        """
         pass
 
     def _store_model(self, name: str, model: Union[Model, ModelEntry]):
@@ -293,6 +315,11 @@ class Context(ABC):
         self.log_message("critical", message)
         self.dispatcher.abort_workflow()
 
+    def has_started(self):
+        """Check if the tool running in the context has started"""
+        metadata = self.retrieve_metadata()
+        return "stats" in metadata and "start_time" in metadata["stats"]
+
     def has_completed(self):
         """Check if the tool running in the context has completed"""
         metadata = self.retrieve_metadata()
@@ -305,6 +332,33 @@ class Context(ABC):
         the context path to get a unique sequence.
         """
         ctxpath_bytes = bytes(self.context_path, encoding="utf-8")
-        root_seed = self.retrieve_common_options()['seed']
-        rng = np.random.default_rng([index, ctxpath_bytes, root_seed])
+        rng = np.random.default_rng([index, ctxpath_bytes, self.seed])
         return rng
+
+    def spawn_seed(self, rng, n=128) -> int:
+        """Spawn a new seed using a random number generator
+
+        Parameters
+        ----------
+        rng : Random number generator
+            Random number generator
+        n : int
+            Size of seed to generate in number of bits
+
+        Returns
+        -------
+        int
+            New random seed
+        """
+        n_full_words = n // 64
+        a = rng.integers(2**64 - 1, size=n_full_words, dtype=np.uint64)
+        x = 0
+        m = 1
+        for val in a:
+            x += int(val) * m
+            m *= 2**64
+        remaining_bits = n % 64
+        if remaining_bits > 0:
+            b = rng.integers(2**remaining_bits - 1, size=1, dtype=np.uint64)
+            x += int(b[0]) * m
+        return x

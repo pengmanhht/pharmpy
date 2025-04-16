@@ -27,9 +27,8 @@ from pharmpy.tools.common import (
     table_final_eta_shrinkage,
     update_initial_estimates,
 )
-from pharmpy.tools.iivsearch.algorithms import _get_fixed_etas
+from pharmpy.tools.iivsearch.algorithms import _get_fixed_etas, get_eta_names
 from pharmpy.tools.linearize.delinearize import delinearize_model
-from pharmpy.tools.linearize.tool import create_workflow as create_linearize_workflow
 from pharmpy.tools.modelfit import create_fit_workflow
 from pharmpy.tools.run import calculate_mbic_penalty, summarize_modelfit_results_from_entries
 from pharmpy.workflows import ModelEntry, Task, Workflow, WorkflowBuilder
@@ -250,12 +249,14 @@ def create_param_mapping(me, linearize):
 
 
 def run_linearization(context, baseme):
-    linearize_context = context.create_subcontext('linearization')
-    linear_workflow = create_linearize_workflow(
+    from pharmpy.tools.run import run_subtool
+
+    linear_results = run_subtool(
+        'linearize',
+        context,
         model=baseme.model,
         description=algorithms.create_description(baseme.model),
     )
-    linear_results = linearize_context.call_workflow(linear_workflow, "running_linearization")
     linbaseme = ModelEntry.create(
         model=linear_results.final_model, modelfit_results=linear_results.final_model_results
     )
@@ -570,8 +571,10 @@ def add_iiv(iiv_strategy, model, modelfit_results, linearize=False):
         added_params = new.parameters - model.parameters
         new = fix_parameters(new, added_params.names)
     elif iiv_strategy in ('fullblock', 'pd_fullblock'):
+        # To exclude e.g. IIV on RUV
+        eta_names = get_eta_names(new, [], {})
         new = create_joint_distribution(
-            new, individual_estimates=modelfit_results.individual_estimates
+            new, eta_names, individual_estimates=modelfit_results.individual_estimates
         )
     return new
 

@@ -7,12 +7,16 @@ import uuid
 import warnings
 from itertools import repeat
 from pathlib import Path
+from tempfile import mkdtemp
+from typing import Optional
 
 import pharmpy.config as config
 from pharmpy.model.external.nonmem import convert_model
 from pharmpy.modeling import get_config_path, write_csv, write_model
 from pharmpy.tools.external.nonmem import conf, parse_modelfit_results, parse_simulation_results
 from pharmpy.workflows import ModelEntry
+
+from .parafile import create_parafile
 
 PARENT_DIR = f'..{os.path.sep}'
 
@@ -24,6 +28,14 @@ def execute_model(model_entry, context):
     database = context.model_database
     model = convert_model(model)
     path = Path.cwd() / f'NONMEM_run_{model.name}-{uuid.uuid1()}'
+
+    if len(context.dispatcher.get_hosts()) > 1 and context.get_ncores_for_execution() > 1:
+        tmp_dir = Path.home() / '.tmp'
+        if not tmp_dir.is_dir():
+            tmp_dir.mkdir()
+        tmp_path = mkdtemp(dir=tmp_dir)
+    else:
+        tmp_path = None
 
     # NOTE: This deduplicates the dataset before running NONMEM, so we know which
     # filename to give to this dataset.
@@ -60,7 +72,8 @@ def execute_model(model_entry, context):
     model = write_csv(model, path=dataset_path, force=True)
     model = write_model(model, path=model_path / "model.ctl", force=True)
 
-    args = nmfe("model.ctl", "model.lst")
+    parafile_option = create_parafile_and_option(context, model_path / 'parafile.pnm', tmp_path)
+    args = nmfe("model.ctl", "model.lst", parafile_option)
 
     stdout = model_path / 'stdout'
     stderr = model_path / 'stderr'
@@ -190,3 +203,15 @@ def nmfe(*args):
         *args,
         *conf_args,
     ]
+
+
+def create_parafile_and_option(context, path: Path, tmp_path: Optional[Path]) -> str:
+    ncores = context.get_ncores_for_execution()
+    if ncores > 1:
+        nodedict = context.dispatcher.get_hosts()
+        if context.dispatcher.get_hostname() == 'localhost':
+            nodedict['localhost'] = ncores
+        create_parafile(path, nodedict, tmp_path)
+        return f"-parafile={path.name}"
+    else:
+        return ""

@@ -67,11 +67,21 @@ class NullContext(Context):
     def retrieve_common_options(self):
         pass
 
+    def retrieve_dispatching_options(self):
+        # Add new options as needed for testing
+        return {'ncores': 1}
+
     def get_parent_context(self):
+        pass
+
+    def get_top_level_context(self):
         pass
 
     def get_subcontext(self, name):
         pass
 
     def create_subcontext(self, name):
+        pass
+
+    def finalize(self):
         pass

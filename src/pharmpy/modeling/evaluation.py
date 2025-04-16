@@ -27,7 +27,9 @@ class DataFrameMapping(Mapping['sympy.Expr', 'np.ndarray']):
 
     def __getitem__(self, symbol: sympy.Expr):
         assert isinstance(symbol, sympy.Symbol)
-        return self._df[symbol.name].to_numpy()
+        col = self._df[symbol.name]
+        assert col is not None
+        return col.to_numpy()
 
     def __len__(self):
         return len(self._df)

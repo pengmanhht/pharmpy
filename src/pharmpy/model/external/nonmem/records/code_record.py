@@ -686,7 +686,17 @@ def _parse_tree(tree: AttrTree):
                     if else_val is not None:
                         pw = sympy.Piecewise((expr, logic_expr), (else_val, True))
                     else:
-                        pw = sympy.Piecewise((expr, logic_expr))
+                        if (
+                            logic_expr == sympy.Ne(sympy.Symbol("NEWIND"), sympy.Integer(2))
+                            and expr.is_Symbol
+                        ):
+                            pw = Expr.first(expr, "ID")
+                        elif logic_expr == sympy.Gt(sympy.Symbol('AMT'), sympy.Integer(0)) and (
+                            str(expr) == "AMT" or str(expr) == "TIME"
+                        ):
+                            pw = Expr.forward(expr, logic_expr)
+                        else:
+                            pw = sympy.Piecewise((expr, logic_expr))
                     ass = Assignment.create(symbol, pw)
                     s.append(ass)
                     new_index.append((child_index, child_index + 1, len(s) - 1, len(s)))
@@ -756,7 +766,9 @@ def _parse_tree(tree: AttrTree):
                 curind = (child_index, child_index + 1, len(s) - len(symbols), len(s))
                 new_index.append(curind)
 
-    return new_index, Statements(s)
+    statements = Statements(s).subs({Expr.symbol('NEWIND'): Expr.newind()})
+
+    return new_index, statements
 
 
 def _reorder_block_statements(s):

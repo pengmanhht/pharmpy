@@ -22,6 +22,9 @@ def test_symbol():
         expr.name
     expr = Expr.function("f", "t")
     assert expr.name == "f"
+    expr = Expr.function('f', ('x', 'y'))
+    assert expr.name == "f"
+    expr = Expr.log(Expr.symbol("x")).name == 'log'
 
 
 def test_piecewise():
@@ -104,6 +107,8 @@ def test_init_boolean_expr():
 def test_boolean_expr_args(expr_lhs, expr_rhs):
     expr = BooleanExpr.eq(expr_lhs, expr_rhs)
     assert expr.args == (expr_lhs, expr_rhs)
+    expr = BooleanExpr.ne(expr_lhs, expr_rhs)
+    assert expr.args == (expr_lhs, expr_rhs)
 
 
 @pytest.mark.parametrize(
@@ -130,3 +135,18 @@ def test_boolean_expr_unicode(expr, ref):
 def test_printer(expr, ref):
     printer = ExprPrinter()
     assert str(printer._print(expr)) == ref
+
+
+def test_first():
+    expr = Expr.first("WGT", "ID")
+    assert expr == Expr.function("first", ("WGT", "ID"))
+
+
+def test_newind():
+    expr = Expr.newind()
+    assert expr == Expr.function("newind", ())
+
+
+def test_forward():
+    expr = Expr.forward(Expr.symbol('TIME'), Expr.symbol('AMT') > 0)
+    assert expr == Expr.function("forward", ('TIME', 'AMT > 0'))

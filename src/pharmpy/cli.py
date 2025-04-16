@@ -62,7 +62,6 @@ from textwrap import dedent
 
 import pharmpy
 from pharmpy.internals.fs.path import path_absolute
-from pharmpy.tools.amd.run import DEFAULT_SEED
 
 from .deps import pandas as pd
 
@@ -114,11 +113,42 @@ def format_keyval_pairs(data_dict, sort=True, right_just=False):
     return lines
 
 
-def run_bootstrap(args):
-    from pharmpy.tools import run_bootstrap
+def run_tool_wrapper(toolname, args, **kwargs):
+    from pharmpy.tools import run_tool
+    from pharmpy.workflows import DispatchingError
+    from pharmpy.workflows.args import InputValidationError
 
+    context = None
+    if args.path is not None:
+        name = args.path.name
+        ref = args.path.parent
+    else:
+        name = None
+        ref = None
+
+    if hasattr(args, 'seed'):
+        kwargs['seed'] = args.seed
+
+    try:
+        run_tool(
+            toolname,
+            **kwargs,
+            broadcaster=args.broadcaster,
+            dispatcher=args.dispatcher,
+            ncores=args.ncores,
+            context=context,
+            name=name,
+            ref=ref,
+        )
+    except (InputValidationError, DispatchingError) as err:
+        error(err)
+
+
+def run_bootstrap(args):
     model, res = args.model
-    run_bootstrap(model, res, resamples=args.samples)
+    run_tool_wrapper(
+        'bootstrap', args, model=model, results=res, resamples=args.samples, dofv=args.dofv
+    )
 
 
 def run_execute(args):
@@ -129,10 +159,8 @@ def run_execute(args):
 
 
 def run_modelsearch(args):
-    from pharmpy.tools import run_tool
-
     model, res = args.model
-    run_tool(
+    run_tool_wrapper(
         'modelsearch',
         model=model,
         results=res,
@@ -148,11 +176,11 @@ def run_modelsearch(args):
 
 
 def run_iivsearch(args):
-    from pharmpy.tools import run_tool
-
     model, res = args.model
-    run_tool(
+
+    run_tool_wrapper(
         'iivsearch',
+        args,
         model=model,
         results=res,
         algorithm=args.algorithm,
@@ -165,17 +193,14 @@ def run_iivsearch(args):
         correlation_algorithm=args.correlation_algorithm,
         E_p=args.e_p,
         E_q=args.e_q,
-        path=args.path,
-        broadcaster=args.broadcaster,
     )
 
 
 def run_iovsearch(args):
-    from pharmpy.tools import run_tool
-
     model, res = args.model
-    run_tool(
+    run_tool_wrapper(
         'iovsearch',
+        args,
         model=model,
         results=res,
         column=args.column,
@@ -190,11 +215,10 @@ def run_iovsearch(args):
 
 
 def run_covsearch(args):
-    from pharmpy.tools import run_tool
-
     model, res = args.model
-    run_tool(
+    run_tool_wrapper(
         'covsearch',
+        args,
         search_space=args.search_space,
         p_forward=args.p_forward,
         p_backward=args.p_backward,
@@ -211,11 +235,10 @@ def run_covsearch(args):
 
 
 def run_ruvsearch(args):
-    from pharmpy.tools import run_tool
-
     model, res = args.model
-    run_tool(
+    run_tool_wrapper(
         'ruvsearch',
+        args,
         model=model,
         results=res,
         groups=args.groups,
@@ -229,11 +252,10 @@ def run_ruvsearch(args):
 
 
 def run_allometry(args):
-    from pharmpy.tools import run_tool
-
     model, res = args.model
-    run_tool(
+    run_tool_wrapper(
         'allometry',
+        args,
         model=model,
         results=res,
         allometric_variable=args.allometric_variable,
@@ -248,11 +270,10 @@ def run_allometry(args):
 
 
 def run_estmethod(args):
-    from pharmpy.tools import run_tool
-
     model, res = args.model
-    run_tool(
+    run_tool_wrapper(
         'estmethod',
+        args,
         args.algorithm,
         methods=args.methods,
         solvers=args.solvers,
@@ -265,13 +286,13 @@ def run_estmethod(args):
 
 
 def run_amd(args):
-    from pharmpy.tools import run_amd
-
     input = args.model_or_path
     dv_types = key_vals(args.dv_types)
     for key, value in dv_types.items():
         dv_types[key] = int(value)
-    run_amd(
+    run_tool_wrapper(
+        'amd',
+        args,
         input,
         results=args.results,
         modeltype=args.modeltype,
@@ -289,26 +310,20 @@ def run_amd(args):
         lloq_limit=args.lloq_limit,
         allometric_variable=args.allometric_variable,
         occasion=args.occasion,
-        path=args.path,
-        resume=args.resume,
         strictness=args.strictness,
         dv_types=dv_types,
         mechanistic_covariates=args.mechanistic_covariates,
         retries_strategy=args.retries_strategy,
-        seed=(
-            args.seed if args.seed is not None else DEFAULT_SEED
-        ),  # seed is a common option but not in AMD
         parameter_uncertainty_method=args.parameter_uncertainty_method,
         ignore_datainfo_fallback=bool(args.ignore_datainfo_fallback),
     )
 
 
 def run_linearize(args):
-    from pharmpy.tools import run_tool
-
     model, res = args.model
-    run_tool(
+    run_tool_wrapper(
         'linearize',
+        args,
         results=res,
         model=model,
         path=args.path,
@@ -316,11 +331,10 @@ def run_linearize(args):
 
 
 def run_retries(args):
-    from pharmpy.tools import run_tool
-
     model, res = args.model
-    run_tool(
+    run_tool_wrapper(
         'retries',
+        args,
         results=res,
         model=model,
         number_of_candidates=args.number_of_candidates,
@@ -818,6 +832,19 @@ group_tools.add_argument(
     metavar='NAME',
     help='Name of the broadcaster to use for log messages',
 )
+group_tools.add_argument(
+    '--dispatcher',
+    type=str,
+    metavar='NAME',
+    help='Name of the dispatcher to use',
+)
+group_tools.add_argument(
+    '--ncores',
+    type=int,
+    metavar='NUMBER',
+    help='Number of cores to use',
+)
+
 
 # for commands with file output
 args_output = argparse.ArgumentParser(add_help=False)
@@ -837,19 +864,31 @@ parser_definition = [
                     'execute': {
                         'help': 'Execute one or more models',
                         'func': run_execute,
-                        'parents': [args_input],
+                        'parents': [args_input, args_tools],
                     }
                 },
                 {
                     'bootstrap': {
                         'help': 'Bootstrap',
                         'func': run_bootstrap,
-                        'parents': [args_model_input],
+                        'parents': [args_model_input, args_random, args_tools],
                         'args': [
                             {
                                 'name': '--samples',
                                 'type': int,
                                 'help': 'Number of bootstrap datasets',
+                            },
+                            {
+                                'name': '--dofv',
+                                'action': 'store_true',
+                                'help': 'Also run evaluation of the bootstrap models on the '
+                                'original dataset',
+                                'default': False,
+                            },
+                            {
+                                'name': '--path',
+                                'type': Path,
+                                'help': 'Path to output directory',
                             },
                         ],
                     }
@@ -858,7 +897,7 @@ parser_definition = [
                     'modelsearch': {
                         'help': 'Search for structural best model',
                         'func': run_modelsearch,
-                        'parents': [args_model_input],
+                        'parents': [args_model_input, args_tools],
                         'args': [
                             {
                                 'name': 'mfl',
@@ -989,7 +1028,7 @@ parser_definition = [
                     'iovsearch': {
                         'help': 'Search for best model IOV model',
                         'func': run_iovsearch,
-                        'parents': [args_model_input],
+                        'parents': [args_model_input, args_tools],
                         'args': [
                             {
                                 'name': '--column',
@@ -1049,7 +1088,7 @@ parser_definition = [
                     'covsearch': {
                         'help': 'Identify covariates that explain some of the IIV',
                         'func': run_covsearch,
-                        'parents': [args_model_input],
+                        'parents': [args_model_input, args_tools],
                         'args': [
                             {
                                 'name': '--search_space',
@@ -1118,7 +1157,7 @@ parser_definition = [
                     'ruvsearch': {
                         'help': 'Search for best residual error model',
                         'func': run_ruvsearch,
-                        'parents': [args_model_input],
+                        'parents': [args_model_input, args_tools],
                         'args': [
                             {
                                 'name': '--groups',
@@ -1168,7 +1207,7 @@ parser_definition = [
                     'allometry': {
                         'help': 'Add allometric scaling',
                         'func': run_allometry,
-                        'parents': [args_model_input],
+                        'parents': [args_model_input, args_tools],
                         'args': [
                             {
                                 'name': '--allometric_variable',
@@ -1223,7 +1262,7 @@ parser_definition = [
                     'estmethod': {
                         'help': 'Assess estimation methods, solvers, and parameter uncertainty methods',
                         'func': run_estmethod,
-                        'parents': [args_model_input],
+                        'parents': [args_model_input, args_tools],
                         'args': [
                             {
                                 'name': 'algorithm',
@@ -1270,7 +1309,7 @@ parser_definition = [
                     'amd': {
                         'help': 'Use Automatic Model Development tool to select PK model',
                         'func': run_amd,
-                        'parents': [args_model_or_path_input, args_random],
+                        'parents': [args_model_or_path_input, args_random, args_tools],
                         'args': [
                             {
                                 'name': '--results',
@@ -1427,7 +1466,7 @@ parser_definition = [
                     'linearize': {
                         'help': 'Linearize a model',
                         'func': run_linearize,
-                        'parents': [args_model_input],
+                        'parents': [args_model_input, args_tools],
                         'args': [
                             {
                                 'name': '--path',
@@ -1661,7 +1700,7 @@ parser_definition = [
                                 'metavar': 'PsN directory',
                                 'type': Path,
                                 'help': 'Path to PsN bootstrap run directory',
-                            }
+                            },
                         ],
                     }
                 },

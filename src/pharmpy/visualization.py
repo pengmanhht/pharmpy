@@ -118,6 +118,7 @@ def line_plot(df, x, title='', xlabel='', ylabel='', legend_title=''):
             alt.Y('value:Q', title=ylabel),
             color=alt.Color(
                 'variable:N',
+                sort=None,
                 legend=alt.Legend(
                     title=legend_title,
                     orient='top-left',
@@ -188,3 +189,29 @@ def facetted_histogram(df):
     chart = alt.layer(background, highlight, data=df).repeat(column=list(df.columns))
 
     return chart
+
+
+def _default_formatter(x):
+    if pd.isna(x):
+        return ""
+    if isinstance(x, float):
+        return "{:,.4f}".format(x)
+    return x
+
+
+def display_table(df, format=None, remove_nan_columns=True):
+    if remove_nan_columns:
+        df = df.dropna(axis=1, how='all')
+    if format is not None:
+        format = {
+            key: lambda x, value=value: "" if pd.isna(x) else value.format(x)
+            for key, value in format.items()
+            if key in df.columns
+        }
+    else:
+        format = _default_formatter
+    styler = df.style.format(format)
+
+    from itables import show
+
+    show(styler, buttons=["copyHtml5", "csvHtml5"], style='width: fit-content; float: left;')

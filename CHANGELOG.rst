@@ -5,6 +5,13 @@ New features
 ============
 
 * Add :code:`dv` option to :code:`get_observations`
+* Add context method :code:`spawn_seed`
+* Add :code:`modeling.is_simulation_model`
+
+Bugfixes
+========
+
+* Fix bug causing groups>!=4 or groups>=10 in ruvsearch to crash or give wrong results
 
 1.6.0 (2025-02-10)
 ------------------

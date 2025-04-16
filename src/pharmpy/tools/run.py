@@ -36,26 +36,31 @@ from pharmpy.tools.mfl.statement.feature.lagtime import LagTime
 from pharmpy.tools.mfl.statement.feature.peripherals import Peripherals
 from pharmpy.tools.mfl.statement.feature.transits import Transits
 from pharmpy.tools.psn_helpers import create_results as psn_create_results
-from pharmpy.workflows import Results, Workflow, execute_workflow, split_common_options
+from pharmpy.workflows import (
+    DispatchingError,
+    Results,
+    Workflow,
+    execute_subtool,
+    execute_workflow,
+    split_common_options,
+)
+from pharmpy.workflows.args import InputValidationError, canonicalize_seed
 from pharmpy.workflows.contexts import Context, LocalDirectoryContext
 from pharmpy.workflows.dispatchers import Dispatcher
 from pharmpy.workflows.model_database import ModelDatabase
 from pharmpy.workflows.model_entry import ModelEntry
 from pharmpy.workflows.results import ModelfitResults, mfr
 
-from .context import create_context
+from .context import broadcast_log
 from .external import parse_modelfit_results
-
-
-class InputValidationError(Exception):
-    pass
 
 
 def fit(
     model_or_models: Union[Model, list[Model]],
     esttool: Optional[str] = None,
-    path: Optional[Union[Path, str]] = None,
+    name: Optional[str] = None,
     context: Optional[Context] = None,
+    ncores: int = 1,
 ) -> Union[ModelfitResults, list[ModelfitResults]]:
     """Fit models.
 
@@ -65,10 +70,12 @@ def fit(
         List of models or one single model
     esttool : str
         Estimation tool to use. None to use default
-    path :  Path | str
-        Path to fit directory
+    name : str
+        Name of run
     context : Context
         Run in this context
+    ncores : int
+        Number of cores to use for estimation
 
     Return
     ------
@@ -93,9 +100,26 @@ def fit(
         else (False, model_or_models)
     )
 
-    modelfit_results = run_tool('modelfit', models, esttool=esttool, path=path, context=context)
+    if not context:
+        dispatcher = 'local_serial'
+    else:
+        dispatcher = None
 
-    return modelfit_results if single else list(modelfit_results)
+    modelfit_results = run_tool(
+        'modelfit',
+        models,
+        esttool=esttool,
+        name=name,
+        context=context,
+        dispatcher=dispatcher,
+        ncores=ncores,
+    )
+
+    return (
+        modelfit_results
+        if single or isinstance(modelfit_results, ModelfitResults)
+        else list(modelfit_results)
+    )
 
 
 def create_results(path: Union[str, Path], **kwargs) -> Results:
@@ -156,7 +180,7 @@ def read_results(path: Union[str, Path]) -> Results:
     return res
 
 
-def run_tool(name: str, *args, **kwargs) -> Union[Model, list[Model], tuple[Model], Results]:
+def run_tool(tool_name: str, *args, **kwargs) -> Union[Model, list[Model], tuple[Model], Results]:
     """Run tool workflow
 
     .. note::
@@ -165,7 +189,7 @@ def run_tool(name: str, *args, **kwargs) -> Union[Model, list[Model], tuple[Mode
 
     Parameters
     ----------
-    name : str
+    tool_name : str
         Name of tool to run
     args
         Arguments to pass to tool
@@ -187,8 +211,8 @@ def run_tool(name: str, *args, **kwargs) -> Union[Model, list[Model], tuple[Mode
     """
     # NOTE: The implementation of run_tool is split into those two functions to
     # allow for individual testing and mocking.
-    tool = import_tool(name)
-    return run_tool_with_name(name, tool, args, kwargs)
+    tool = import_tool(tool_name)
+    return run_tool_with_name(tool_name, tool, args, kwargs)
 
 
 def import_tool(name: str):
@@ -196,9 +220,11 @@ def import_tool(name: str):
 
 
 def run_tool_with_name(
-    name: str, tool, args: Sequence, kwargs: Mapping[str, Any]
+    tool_name: str, tool, args: Sequence, kwargs: Mapping[str, Any]
 ) -> Union[Model, list[Model], tuple[Model], Results]:
-    dispatching_options, common_options, tool_options = split_common_options(kwargs)
+    dispatching_options, common_options, seed, tool_options = split_common_options(kwargs)
+
+    seed = canonicalize_seed(seed)
 
     if validate_input := getattr(tool, 'validate_input', None):
         try:
@@ -206,16 +232,48 @@ def run_tool_with_name(
         except Exception as err:
             raise InputValidationError(str(err))
 
-    dispatcher, ctx = get_run_setup(dispatching_options, common_options, name)
+    dispatcher = Dispatcher.select_dispatcher(dispatching_options['dispatcher'])
+    ctx = get_context(dispatching_options, tool_name)
+
+    if ctx.has_started():
+        if ctx.has_completed():
+            tool_params = inspect.signature(tool.create_workflow).parameters
+            tool_param_types = get_type_hints(tool.create_workflow)
+
+            prev_tool_options = _parse_tool_options_from_json_metadata(
+                ctx.retrieve_metadata(), tool_params, tool_param_types, ctx
+            )
+
+            if tool_options != prev_tool_options:
+                raise DispatchingError(
+                    "The arguments to the tool are different from the first time "
+                    "it was run. "
+                    "Delete the directory or run again using a new name."
+                )
+
+            results = ctx.retrieve_results()
+            broadcast_log(ctx)
+            return results
+        else:
+            ctx.log_info("Resuming interrupted run")
+    else:
+        pass
+
+    dispatching_options['context'] = {
+        '__class__': type(ctx).__name__,
+        'name': str(ctx.name),
+        'ref': str(ctx.ref),
+    }
 
     create_workflow = tool.create_workflow
 
     tool_metadata = create_metadata(
         database=ctx,
-        tool_name=name,
+        tool_name=tool_name,
         tool_func=create_workflow,
         args=args,
         tool_options=tool_options,
+        seed=seed,
         common_options=common_options,
         dispatching_options=dispatching_options,
     )
@@ -241,13 +299,20 @@ def run_tool_with_name(
                     )
 
     wf: Workflow = create_workflow(*args, **tool_options)
-    assert wf.name == name
+    assert wf.name == tool_name
 
     res = execute_workflow(wf, dispatcher=dispatcher, context=ctx)
-    assert name == 'modelfit' or isinstance(res, Results) or name == 'simulation' or res is None
+    assert (
+        tool_name == 'modelfit'
+        or isinstance(res, Results)
+        or tool_name == 'simulation'
+        or res is None
+    )
 
-    tool_metadata = _update_metadata(tool_metadata, res)
+    tool_metadata = _update_metadata(tool_metadata)
     ctx.store_metadata(tool_metadata)
+
+    ctx.finalize()
 
     return res
 
@@ -258,21 +323,62 @@ def create_metadata(
     tool_func,
     args: Sequence,
     tool_options: Mapping[str, Any],
-    common_options: Mapping[str, Any],
-    dispatching_options: Mapping[str, Any],
+    seed: int,
+    common_options: Optional[Mapping[str, Any]] = None,
+    dispatching_options: Optional[Mapping[str, Any]] = None,
 ):
     tool_metadata = _create_metadata_tool(database, tool_name, tool_func, args, tool_options)
-    setup_metadata = _create_metadata_common(database, tool_name, common_options)
-    tool_metadata['common_options'] = setup_metadata
-    tool_metadata['dispatching_options'] = dispatching_options
+    if common_options and dispatching_options:
+        setup_metadata = _create_metadata_common(database, tool_name, common_options)
+        tool_metadata['common_options'] = setup_metadata
+        tool_metadata['dispatching_options'] = dispatching_options
+    tool_metadata['seed'] = seed
 
     return tool_metadata
 
 
-def _update_metadata(tool_metadata, res):
+def _update_metadata(tool_metadata):
     # FIXME: Make metadata immutable
     tool_metadata['stats']['end_time'] = _now()
     return tool_metadata
+
+
+def run_subtool(tool_name: str, ctx: Context, name=None, **kwargs):
+    if not name:
+        name = tool_name
+    tool = import_tool(tool_name)
+    subctx = ctx.create_subcontext(name)
+
+    if subctx.has_completed():
+        res = subctx.retrieve_results()
+        subctx.log_info("Retrieving results from previously finished subtool")
+        return res
+
+    seed = kwargs.get('seed', None)
+    seed = canonicalize_seed(seed)
+    if 'seed' in kwargs.keys():
+        del kwargs['seed']
+
+    create_workflow = tool.create_workflow
+    tool_metadata = create_metadata(
+        database=ctx,
+        tool_name=tool_name,
+        tool_func=create_workflow,
+        args=tuple(),
+        tool_options=kwargs,
+        seed=seed,
+    )
+    subctx.store_metadata(tool_metadata)
+    wf: Workflow = create_workflow(**kwargs)
+    assert wf.name == tool_name
+
+    res = execute_subtool(wf, context=subctx)
+    tool_metadata = _update_metadata(tool_metadata)
+    subctx.store_metadata(tool_metadata)
+
+    subctx.finalize()
+
+    return res
 
 
 def resume_tool(path: str):
@@ -295,9 +401,9 @@ def resume_tool(path: str):
 
     """
 
-    dispatcher, tool_database = _get_run_setup_from_metadata(path)
+    dispatcher, ctx = _get_run_setup_from_metadata(path)
 
-    tool_metadata = tool_database.retrieve_metadata()
+    tool_metadata = ctx.retrieve_metadata()
     tool_name = tool_metadata['tool_name']
 
     tool = importlib.import_module(f'pharmpy.tools.{tool_name}')
@@ -308,7 +414,7 @@ def resume_tool(path: str):
     tool_param_types = get_type_hints(create_workflow)
 
     tool_options = _parse_tool_options_from_json_metadata(
-        tool_metadata, tool_params, tool_param_types, tool_database
+        tool_metadata, tool_params, tool_param_types, ctx
     )
 
     args, kwargs = _parse_args_kwargs_from_tool_options(tool_params, tool_options)
@@ -319,11 +425,11 @@ def resume_tool(path: str):
     wf: Workflow = create_workflow(*args, **kwargs)
     assert wf.name == tool_name
 
-    res = execute_workflow(wf, dispatcher=dispatcher, database=tool_database)
+    res = execute_workflow(wf, dispatcher=dispatcher, database=ctx)
     assert tool_name == 'modelfit' or isinstance(res, Results)
 
-    tool_metadata = _update_metadata(tool_metadata, res)
-    tool_database.store_metadata(tool_metadata)
+    tool_metadata = _update_metadata(tool_metadata)
+    ctx.store_metadata(tool_metadata)
 
     return res
 
@@ -332,9 +438,10 @@ def _parse_tool_options_from_json_metadata(
     tool_metadata,
     tool_params,
     tool_param_types,
-    tool_database,
+    ctx,
 ):
     tool_options = tool_metadata['tool_options']
+    db: ModelDatabase = ctx.model_database
     # NOTE: Load models to memory
     for model_key in _input_model_param_keys(tool_params, tool_param_types):
         model_metadata = tool_options.get(model_key)
@@ -344,16 +451,13 @@ def _parse_tool_options_from_json_metadata(
             )
 
         assert model_metadata['__class__'] == 'Model'
-        model_name = model_metadata['arg_name']
-        db_name = model_metadata['db_name']
+        model_hash = model_metadata['key']
 
-        db: ModelDatabase = tool_database.model_database
         try:
-            model = db.retrieve_model(db_name)
-            model = model.replace(name=model_name)
+            model = db.retrieve_model(model_hash)
         except KeyError:
             raise ValueError(
-                f'Cannot resume run because model argument "{model_key}" ({model_name}) cannot be restored.'
+                f'Cannot resume run because model argument "{model_key}" ({model_hash}) cannot be restored.'
             )
         tool_options = tool_options.copy()
         tool_options[model_key] = model
@@ -363,7 +467,7 @@ def _parse_tool_options_from_json_metadata(
         results_json = tool_options.get(results_key)
         if results_json is not None:
             tool_options = tool_options.copy()
-            tool_options[results_key] = pharmpy.workflows.results.read_results(results_json)
+            tool_options[results_key] = db.retrieve_modelfit_results(results_json["key"])
 
     return tool_options
 
@@ -483,7 +587,7 @@ def _store_model(db: ModelDatabase, metadata, arg: str, model: Model):
 
 
 def _create_metadata_common(
-    database: Context, toolname: Optional[str], common_options: Mapping[str, Any]
+    database: Context, tool_name: Optional[str], common_options: Mapping[str, Any]
 ):
     setup_metadata = {}
     for key, value in common_options.items():
@@ -520,40 +624,32 @@ def _now():
     return datetime.now().astimezone().isoformat()
 
 
-def get_run_setup(dispatching_options, common_options, toolname) -> tuple[Any, Context]:
-    # FIXME: Currently only one dispatcher
-    dispatcher = Dispatcher.select_dispatcher(None)
+def _get_name(options, default_context, tool_name) -> str:
+    name = options['name']
+    if name is None:
+        name = _create_new_context_name(default_context, tool_name)
+    return name
 
-    ctx = dispatching_options.get('context', None)
+
+def _create_new_context_name(context: type[Context], tool_name: str) -> str:
+    n = 1
+    while True:
+        name = f"{tool_name}{n}"
+        if not context.exists(name):
+            break
+        n += 1
+    return name
+
+
+def get_context(dispatching_options, tool_name) -> Context:
+    ctx = dispatching_options['context']
     if ctx is None:
         from pharmpy.workflows import default_context
 
-        common_path = dispatching_options.get('path', None)
-        if common_path is not None:
-            path = Path(dispatching_options['path'])
-            ctx = default_context(path.name, path.parent)
-        else:
-            n = 1
-            while True:
-                name = f"{toolname}{n}"
-                if not default_context.exists(name):
-                    ctx = default_context(name)
-                    break
-                n += 1
-    elif not isinstance(ctx, Context):
-        # Assume a full path
-        path = Path(ctx)
-        name = path.name
-        ref = str(path.parent)
-        ctx = create_context(name, ref)
-
-    dispatching_options['context'] = {
-        '__class__': type(ctx).__name__,
-        'name': str(ctx.name),
-        'ref': str(ctx.ref),
-    }
-
-    return dispatcher, ctx
+        name = _get_name(dispatching_options, default_context, tool_name)
+        ref = dispatching_options['ref']
+        ctx = default_context(name, ref)
+    return ctx
 
 
 def _open_context(source):
@@ -1188,8 +1284,8 @@ def _get_model_result_summary(me, include_all_execution_steps=False):
         index = pd.MultiIndex.from_tuples(tuples, names=['model', 'step'])
         summary_df = pd.DataFrame(summary_dicts, index=index)
 
-    no_of_errors = len(res.log.errors)
-    no_of_warnings = len(res.log.warnings)
+    no_of_errors = len(res.log.errors) if res.log is not None else 0
+    no_of_warnings = len(res.log.warnings) if res.log is not None else 0
 
     minimization_idx = summary_df.columns.get_loc('minimization_successful')
     summary_df.insert(loc=minimization_idx + 1, column='errors_found', value=no_of_errors)

@@ -143,6 +143,7 @@ def same_time(model: pharmpy.model.Model) -> bool:
         return False
 
     dataset = model.dataset.reset_index()
+    assert dataset is not None
 
     if "RATE" in dataset.columns:
         rate = True
@@ -159,6 +160,7 @@ def same_time(model: pharmpy.model.Model) -> bool:
                     ID = row["ID"]
                     TIME = row["TIME"]
                     subset = dataset[(dataset["ID"] == ID) & (dataset["TIME"] == TIME)]
+                    assert subset is not None
                     unique_evid = subset[
                         "EVID"
                     ].unique()  # pyright: ignore [reportAttributeAccessIssue]
@@ -200,6 +202,7 @@ def change_same_time(model: pharmpy.model.Model) -> pharmpy.model.Model:
 
     dataset = model.dataset.copy()
     dataset = dataset.reset_index(drop=True)
+    assert dataset is not None
 
     if "RATE" in dataset.columns:
         rate = True
@@ -216,6 +219,7 @@ def change_same_time(model: pharmpy.model.Model) -> pharmpy.model.Model:
                     ID = row["ID"]
                     TIME = row["TIME"]
                     subset = dataset[(dataset["ID"] == ID) & (dataset["TIME"] == TIME)]
+                    assert subset is not None
                     unique_evid = subset[
                         "EVID"
                     ].unique()  # pyright: ignore [reportAttributeAccessIssue]

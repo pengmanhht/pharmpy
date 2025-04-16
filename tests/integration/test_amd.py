@@ -6,7 +6,7 @@ import pytest
 
 from pharmpy.internals.fs.cwd import chdir
 from pharmpy.tools import run_amd
-from pharmpy.workflows import LocalDirectoryContext
+from pharmpy.tools.context import open_context
 
 
 def _model_count(rundir: Path):
@@ -19,11 +19,19 @@ def _model_count(rundir: Path):
 
 
 @pytest.mark.parametrize(
-    'strategy, subrundir',
+    'model_kwargs, run_kwargs, search_space, subtools',
     [
         (
-            'default',
-            [
+            {
+                'modeltype': 'basic_pk',
+                'administration': 'iv',
+                'cl_init': 1,
+                'vc_init': 10,
+                'occasion': 'VISI',
+            },
+            {'strategy': 'default', 'retries_strategy': 'skip'},
+            'ABSORPTION([FO,ZO]);PERIPHERALS(0..2)',
+            {
                 'modelfit',
                 'modelsearch',
                 'iivsearch',
@@ -31,14 +39,20 @@ def _model_count(rundir: Path):
                 'iovsearch',
                 'allometry',
                 'covsearch_exploratory',
-                'covsearch_mechanistic',  # FIXME: Theses two are currently created as empty
-                'covsearch_structural',
                 'simulation',
-            ],
+            },
         ),
         (
-            'reevaluation',
-            [
+            {
+                'modeltype': 'basic_pk',
+                'administration': 'iv',
+                'cl_init': 1,
+                'vc_init': 10,
+                'occasion': 'VISI',
+            },
+            {'strategy': 'reevaluation', 'retries_strategy': 'skip'},
+            'ABSORPTION([FO,ZO]);PERIPHERALS(0..2)',
+            {
                 'modelfit',
                 'modelsearch',
                 'iivsearch',
@@ -46,49 +60,33 @@ def _model_count(rundir: Path):
                 'iovsearch',
                 'allometry',
                 'covsearch_exploratory',
-                'covsearch_mechanistic',  # FIXME: Theses two are currently created as empty
-                'covsearch_structural',
                 'rerun_iivsearch',
                 'rerun_ruvsearch',
                 'simulation',
-            ],
+            },
         ),
     ],
 )
-@pytest.mark.filterwarnings(
-    'ignore:.*Adjusting initial estimates to create positive semidefinite omega/sigma matrices.',
-    'ignore::UserWarning',
-)
-def test_amd_basic(tmp_path, testdata, strategy, subrundir):
+def test_amd_dummy(tmp_path, testdata, model_kwargs, run_kwargs, search_space, subtools):
     with chdir(tmp_path):
         shutil.copy2(testdata / 'nonmem' / 'models' / 'moxo_simulated_amd.csv', '.')
         shutil.copy2(testdata / 'nonmem' / 'models' / 'moxo_simulated_amd.datainfo', '.')
         input = 'moxo_simulated_amd.csv'
-        res = run_amd(
-            input,
-            modeltype='basic_pk',
-            administration='oral',
-            search_space='ABSORPTION(FO);PERIPHERALS(1)',
-            strategy=strategy,
-            occasion='VISI',
-            strictness='minimization_successful or rounding_errors',
-            retries_strategy='skip',
-            cl_init=0.01,
-            vc_init=1.0,
-            mat_init=0.1,
-        )
+        res = run_amd(input, **model_kwargs, **run_kwargs, esttool='dummy')
+
+        assert (
+            len(res.summary_tool) == len(subtools) - 1
+        )  # Simulation is not part of the result table
+        assert len(res.summary_models) > len(subtools)
 
         rundir = tmp_path / 'amd1'
         assert rundir.is_dir()
         assert (rundir / 'results.json').exists()
         assert (rundir / 'results.csv').exists()
 
-        ctx = LocalDirectoryContext("amd1")
+        ctx = open_context("amd1")
         subnames = ctx.list_all_subcontexts()
-        assert set(subnames) == set(subrundir)
-
-        assert len(res.summary_tool) >= 1
-        assert len(res.summary_models) >= 1
+        assert set(subnames) == subtools
 
 
 # def test_structure_mechanistic_exploratory(tmp_path, testdata):

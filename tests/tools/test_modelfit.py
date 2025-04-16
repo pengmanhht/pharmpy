@@ -1,5 +1,12 @@
 import numpy as np
+import pytest
 
+from pharmpy.basic import Expr
+from pharmpy.tools.modelfit.evaluation import (
+    evaluate_model,
+    get_functions_to_solve_for,
+    get_variables_before_odes,
+)
 from pharmpy.tools.modelfit.ucp import (
     build_initial_values_matrix,
     build_parameter_coordinates,
@@ -103,3 +110,24 @@ def test_calculate_matrix_gradient_scale():
     scale = scale_matrix(omega_ucp)
     grad = calculate_matrix_gradient_scale(omega_ucp, scale, build_parameter_coordinates(omega_ucp))
     assert np.allclose(grad, np.array([0.2]))
+
+
+def test_get_variables_before_odes(load_example_model_for_test):
+    model = load_example_model_for_test("pheno")
+    vars = get_variables_before_odes(model)
+    assert len(vars) == 3
+    assert vars[Expr.symbol('CL')] == Expr("0.00469307*WGT*exp(ETA_CL)")
+
+
+def test_get_functions_to_solve_for(load_example_model_for_test):
+    model = load_example_model_for_test("pheno")
+    vars = get_functions_to_solve_for(model)
+    assert vars == {Expr.function("A_CENTRAL", "t")}
+
+
+def test_evaluate_model(load_example_model_for_test):
+    model = load_example_model_for_test("pheno")
+    res = evaluate_model(model)
+    print(res)
+    assert res.loc[0, 'Y'] == pytest.approx(17.695056, abs=1e-5)
+    assert res.loc[743, 'Y'] == pytest.approx(34.411508, abs=1e-5)

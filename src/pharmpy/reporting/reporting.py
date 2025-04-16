@@ -46,6 +46,8 @@ def generate_report(rst_path, results_path, target_path):
         source_path = tmp_path / 'source'
         source_path.mkdir()
         shutil.copy(rst_path, source_path / 'results.rst')
+        # FIXME: Crude templating for now. Could move to separate directory
+        shutil.copy(rst_path.parent.parent / 'amd' / 'common.rst', source_path / 'common.txt')
         if results_path.is_dir():
             results_path /= 'results.json'
         shutil.copy(results_path, source_path)
@@ -175,6 +177,8 @@ def embed_css_and_js(html, target):
         stylesheet_src = stylesheet.attrs['href']
         # Remove versioning of css files that was added by Sphinx 8.1
         stylesheet_src = re.sub(r'\?v=.*', '', stylesheet_src)
+        if stylesheet_src.startswith("https"):
+            continue
         tag = soup.new_tag("style")
         tag['type'] = 'text/css'
         path = html.parent / stylesheet_src

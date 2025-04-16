@@ -40,12 +40,15 @@ class LocalDirectoryContext(Context):
             ref = str(Path.cwd())
         path = Path(ref) / name
 
-        self._init_path(path)
+        isnew = self._init_path(path)
+        if isnew:
+            self._init_subcontexts()
         self._init_top_path()
         self._init_model_database()
-        self._init_annotations()
-        self._init_model_name_map()
-        self._init_log()
+        if isnew:
+            self._init_annotations()
+            self._init_model_name_map()
+            self._init_log()
         super().__init__(name, ref)
 
     def __repr__(self) -> str:
@@ -55,7 +58,11 @@ class LocalDirectoryContext(Context):
         self.path = path_absolute(path)
         if not self.path.is_dir():
             self.path.mkdir(parents=True)
+            return True
+        else:
+            return False
 
+    def _init_subcontexts(self):
         if not (self.path / 'subcontexts').is_dir():
             (self.path / 'subcontexts').mkdir()
 
@@ -99,6 +106,12 @@ class LocalDirectoryContext(Context):
         path.touch(exist_ok=True)
         return path_lock(str(path), shared=False)
 
+    def _delete_lock(self, path: Path):
+        # Delete a lock
+        path = path.with_suffix('.lock')
+        if path.is_file():
+            path.unlink()
+
     @staticmethod
     def exists(name: str, ref: Optional[str] = None):
         if ref is None:
@@ -122,8 +135,7 @@ class LocalDirectoryContext(Context):
 
     @property
     def _metadata_path(self) -> Path:
-        # Currently one metadata for nested context
-        return self._top_path / 'metadata.json'
+        return self.path / 'metadata.json'
 
     @property
     def _models_path(self) -> Path:
@@ -242,8 +254,27 @@ class LocalDirectoryContext(Context):
         return df
 
     def retrieve_common_options(self) -> dict[str, Any]:
-        meta = self.retrieve_metadata()
+        ctx_top = self.get_top_level_context()
+        meta = ctx_top.retrieve_metadata()
         return meta['common_options']
+
+    def retrieve_dispatching_options(self) -> dict[str, Any]:
+        if hasattr(self, '_dispatching_options'):
+            return self._dispatching_options
+        ctx_top = self.get_top_level_context()
+        meta = ctx_top.retrieve_metadata()
+        if 'dispatching_options' in meta:
+            options = meta['dispatching_options']
+        else:
+            from pharmpy.workflows.args import (
+                canonicalize_dispatching_options,
+                get_default_dispatching_options,
+            )
+
+            options = get_default_dispatching_options()
+            canonicalize_dispatching_options(options)
+        self._dispatching_options = options
+        return options
 
     def get_parent_context(self) -> LocalDirectoryContext:
         if self.path == self._top_path:
@@ -252,17 +283,33 @@ class LocalDirectoryContext(Context):
         parent = LocalDirectoryContext(name=parent_path.name, ref=parent_path.parent)
         return parent
 
+    def get_top_level_context(self) -> LocalDirectoryContext:
+        ctx_top = LocalDirectoryContext(name=self._top_path.name, ref=self._top_path.parent)
+        return ctx_top
+
     def get_subcontext(self, name: str) -> LocalDirectoryContext:
-        path = self.path / 'subcontexts' / name
+        subcontexts_path = self.path / 'subcontexts'
+        if subcontexts_path.is_dir():
+            path = subcontexts_path / name
+        else:
+            path = self.path / name
         if path.is_dir():
             return LocalDirectoryContext(name=name, ref=path.parent)
         else:
-            raise ValueError(f"No subcontext with the name {name}")
+            raise ValueError(f'No subcontext with the name "{name}"')
 
     def create_subcontext(self, name: str) -> LocalDirectoryContext:
-        path = self.path / 'subcontexts'
+        subcontexts_path = self.path / 'subcontexts'
+        if subcontexts_path.is_dir():
+            path = subcontexts_path
+        else:
+            path = self.path
         ctx = LocalDirectoryContext(name=name, ref=path)
         return ctx
+
+    def finalize(self):
+        self._delete_lock(self._annotations_path)
+        self._delete_lock(self._log_path)
 
 
 class MetadataJSONEncoder(json.JSONEncoder):

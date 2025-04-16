@@ -9,6 +9,7 @@ from pharmpy.internals.fs.tmp import TemporaryDirectory
 
 from ..workflow import Workflow, WorkflowBuilder, insert_context
 from .baseclass import Dispatcher
+from .slurm_helpers import get_slurm_nodename, is_running_on_slurm
 
 T = TypeVar('T')
 
@@ -77,10 +78,15 @@ class LocalDaskDispatcher(Dispatcher):
                         warnings.filterwarnings(
                             "ignore", "Couldn't detect a suitable IP address for reaching"
                         )
+                        # When processes=False the number of workers is 1. Use threads per worker option to parallelize
+                        ncores = context.retrieve_dispatching_options()['ncores']
                         with LocalCluster(
-                            processes=False, dashboard_address=':31058'
+                            processes=False, dashboard_address=':31058', threads_per_worker=ncores
                         ) as cluster, Client(cluster) as client:
-                            context.log_info(f"Dispatching workflow in {context}: {client}")
+                            context.log_info(
+                                "Dispatching workflow with local_dask dispatcher "
+                                f"in {context}: {client}"
+                            )
                             dsk_optimized = optimize_task_graph_for_dask_distributed(client, dsk)
 
                             def sigint_handler(sig, frame):
@@ -150,6 +156,19 @@ class LocalDaskDispatcher(Dispatcher):
         client = get_client()
         _turn_off_dask_logging()
         client.close()
+
+    def get_hosts(self) -> dict[str, int]:
+        hosts = {'localhost': os.cpu_count()}
+        return hosts
+
+    def get_hostname(self) -> str:
+        if is_running_on_slurm():
+            return get_slurm_nodename()
+        else:
+            return 'localhost'
+
+    def get_available_cores(self, allocation: int):
+        return 1
 
 
 def _turn_off_dask_logging():

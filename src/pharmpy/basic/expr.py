@@ -43,7 +43,10 @@ class Expr:
         if isinstance(self._expr, symengine.Symbol):
             return self._expr.name
         elif isinstance(self._expr, symengine.Function):
-            return self._expr.get_name()
+            try:
+                return self._expr.get_name()
+            except AttributeError:
+                return str(self._expr).partition("(")[0]
         else:
             raise ValueError("Expression has no name")
 
@@ -262,13 +265,36 @@ class Expr:
 
     @classmethod
     def function(cls, f: str, x) -> Expr:
-        func = symengine.Function(f)(x)
+        if isinstance(x, tuple):
+            func = symengine.Function(f)(*x)
+        else:
+            func = symengine.Function(f)(x)
         return cls(func)
 
     @classmethod
     def piecewise(cls, *args) -> Expr:
         pw = symengine.Piecewise(*args)
         return cls(pw)
+
+    @classmethod
+    def first(cls, col, group):
+        """Function giving the first value of col for all records in group"""
+        return cls.function("first", (col, group))
+
+    @classmethod
+    def newind(cls):
+        """The newind function
+
+        0 - For the first record of the dataset
+        1 - For the first record of each individual (except if it is the first in the dataset)
+        2 - For any other record
+        """
+        return cls.function("newind", ())
+
+    @classmethod
+    def forward(cls, value, condition):
+        """Function to carry forward value at a certain condition"""
+        return cls.function("forward", (value, condition))
 
     def __gt__(self, other) -> BooleanExpr:
         return BooleanExpr(symengine.Gt(self._expr, other))
@@ -324,6 +350,10 @@ class BooleanExpr:
     @classmethod
     def eq(cls, lhs: TExpr, rhs: TExpr) -> BooleanExpr:
         return cls(sympy.Eq(lhs, rhs))
+
+    @classmethod
+    def ne(cls, lhs: TExpr, rhs: TExpr) -> BooleanExpr:
+        return cls(sympy.Ne(lhs, rhs))
 
     @classmethod
     def gt(cls, lhs: TExpr, rhs: TExpr) -> BooleanExpr:

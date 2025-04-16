@@ -26,22 +26,9 @@ def td_exhaustive_no_of_etas(base_model, index_offset=0, keep=None, param_mappin
     base_model = base_model.replace(
         description=create_description(base_model, param_dict=param_mapping)
     )
+    eta_names = get_eta_names(base_model, keep, param_mapping)
 
-    iivs = base_model.random_variables.iiv
-    iiv_names = iivs.names
-    if keep:
-        if param_mapping is None:
-            iiv_names = _remove_sublist(iiv_names, _get_eta_from_parameter(base_model, keep))
-        else:
-            iiv_names = [
-                name for name in iiv_names if name not in keep and param_mapping[name] not in keep
-            ]
-
-    # Remove fixed etas
-    fixed_etas = _get_fixed_etas(base_model)
-    iiv_names = _remove_sublist(iiv_names, fixed_etas)
-
-    for i, to_remove in enumerate(non_empty_subsets(iiv_names), 1):
+    for i, to_remove in enumerate(non_empty_subsets(eta_names), 1):
         model_name = f'iivsearch_run{i + index_offset}'
         if param_mapping:
             etas = param_mapping.keys()
@@ -64,6 +51,23 @@ def td_exhaustive_no_of_etas(base_model, index_offset=0, keep=None, param_mappin
     wf_fit = modelfit.create_fit_workflow(n=len(wb.output_tasks))
     wb.insert_workflow(wf_fit)
     return Workflow(wb)
+
+
+def get_eta_names(model, keep, param_mapping):
+    iiv_symbs = model.random_variables.iiv.free_symbols
+    etas = model.statements.before_odes.free_symbols.intersection(iiv_symbs)
+    # Extract to have correct order, necessary for create_joint_distribution
+    eta_names = model.random_variables[etas].names
+    if keep and param_mapping:
+        keep = tuple(k for k, v in param_mapping.items() if v in keep)
+
+    if keep:
+        eta_names = _remove_sublist(eta_names, _get_eta_from_parameter(model, keep))
+
+    # Remove fixed etas
+    fixed_etas = _get_fixed_etas(model)
+    etas = _remove_sublist(eta_names, fixed_etas)
+    return etas
 
 
 def bu_stepwise_no_of_etas(
@@ -269,14 +273,13 @@ def td_exhaustive_block_structure(base_model, index_offset=0, param_mapping=None
         description=create_description(base_model, param_dict=param_mapping)
     )
 
-    iivs = base_model.random_variables.iiv
     model_no = 1 + index_offset
 
     fixed_etas = _get_fixed_etas(base_model)
-    iiv_names = _remove_sublist(iivs.names, fixed_etas)
-
-    for block_structure in _rv_block_structures(iiv_names):
-        if _is_rv_block_structure(iivs, block_structure, fixed_etas):
+    eta_names = get_eta_names(base_model, [], param_mapping)
+    etas_base_model = base_model.random_variables[eta_names]
+    for block_structure in _rv_block_structures(eta_names):
+        if _is_rv_block_structure(etas_base_model, block_structure, fixed_etas):
             continue
 
         model_name = f'iivsearch_run{model_no}'
