@@ -182,7 +182,8 @@ def create_workflow(
         index offset for naming of runs. Default is 0.
     nsamples : int
         Number of samples from individual parameter conditional distribution for linear covariate model selection.
-        Default is 10, i.e. generating 10 samples per subject
+        Default is 10, i.e. generating 10 samples per subject. For SAMBA methods, setting nsamples=1 uses conditional
+        means of the distribution for linear covariate model selection.
     samba_max_covariates: int or None
         Maximum number of covariate inclusion allowed in linear covariate screening for each parameter.
     samba_linreg_method: str

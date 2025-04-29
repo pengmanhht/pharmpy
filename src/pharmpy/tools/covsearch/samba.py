@@ -245,8 +245,6 @@ def samba_forward(
 
 
 # ========== INIT SEARCH STATE =====================
-# NOTE: so far the maximum suppported nsamples for samba is 10,
-# limited by unable to set $SIZES ISAMPLEMAX=250 automatically with pharmpy
 def samba_init_search_state(context, search_space, nsamples, algorithm, input_modelentry):
     model = input_modelentry.model
     effect_funcs, filtered_model = samba_effect_funcs_and_start_model(search_space, model)
@@ -533,7 +531,7 @@ def create_linear_covariate_dataset(
 
     # retrieve ETA or ETA samples for specified parameters
     etas = [get_parameter_rv(modelentry.model, param)[0] for param in parameters]
-    if algorithm.startswith("samba"):
+    if algorithm.startswith("samba") and nsamples != 1:
         eta_columns = modelentry.modelfit_results.individual_eta_samples[etas]
     elif algorithm.startswith("scm") and linreg_method == "lme":
         eta_columns = _sample_eta_multivariate_normal(modelentry, nsamples)[etas]
