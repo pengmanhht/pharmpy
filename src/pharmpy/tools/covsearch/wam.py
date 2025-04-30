@@ -72,7 +72,7 @@ from pharmpy.tools.covsearch.util import (
     DummyEffect,
     SearchState,
     StateAndEffect,
-    Step,
+    BackwardStep,
     Test,
     TestResult,
     store_input_model,
@@ -146,10 +146,6 @@ class WaldInput:
     num_obs: int
     num_thetas: int  # number of all thetas
     num_covars: int  # number of covariate parameters
-
-
-class BackwardStep(Step):
-    pass
 
 
 class WAMStep(BackwardStep):

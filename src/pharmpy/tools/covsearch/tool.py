@@ -23,6 +23,7 @@ from pharmpy.tools.common import (
 from pharmpy.tools.covsearch.samba import samba_workflow
 from pharmpy.tools.covsearch.score import score_workflow
 from pharmpy.tools.covsearch.wam import wam_workflow
+from pharmpy.tools.covsearch.util import Step, ForwardStep, BackwardStep
 from pharmpy.tools.mfl.feature.covariate import EffectLiteral
 from pharmpy.tools.mfl.feature.covariate import features as covariate_features
 from pharmpy.tools.mfl.feature.covariate import parse_spec, spec
@@ -67,20 +68,6 @@ class RemoveEffect(Effect):
 
 
 class DummyEffect(Effect):
-    pass
-
-
-@dataclass(frozen=True)
-class Step:
-    alpha: float
-    effect: Effect
-
-
-class ForwardStep(Step):
-    pass
-
-
-class BackwardStep(Step):
     pass
 
 

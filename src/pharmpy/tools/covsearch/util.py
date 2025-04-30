@@ -40,6 +40,10 @@ class ForwardStep(Step):
     pass
 
 
+class BackwardStep(Step):
+    pass
+
+
 @dataclass
 class Candidate:
     modelentry: ModelEntry
