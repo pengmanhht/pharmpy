@@ -68,6 +68,7 @@ from pharmpy.tools.covsearch.samba import (
     samba_effect_funcs_and_start_model,
 )
 from pharmpy.tools.covsearch.util import (
+    BackwardStep,
     Candidate,
     DummyEffect,
     SearchState,
@@ -452,7 +453,7 @@ def wam_nonlinear_model_selection(
         for cov_effect, cov_func in selection.items():
             updated_model = cov_func(updated_model)
             desc = desc + f";({'-'.join(cov_effect[:3])})"
-            steps += (WAMStep(p_backward, DummyEffect(*cov_effect)),)
+            steps += (BackwardStep(p_backward, DummyEffect(*cov_effect)),)
 
         # update model metadata
         updated_model = updated_model.replace(name=f"wam_rank#{r + 1}", description=desc)
