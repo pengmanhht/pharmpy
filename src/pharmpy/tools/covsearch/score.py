@@ -61,6 +61,7 @@ from pharmpy.tools.covsearch.util import (
     ForwardStep,
     SearchState,
     StateAndEffect,
+    StepResult,
     Test,
     TestResult,
     store_input_model,
@@ -104,33 +105,6 @@ class ScoreTest(Test):
         else:
             pval = np.nan
         return pval
-
-
-@dataclass
-class StepResult:
-    rank: int
-    result: list
-    score_fetcher: dict
-    effect_fetcher: dict
-
-    def processed_result(
-        self,
-        sort_by: Literal["stat", "pval", "penalized_stat"] = "penalized_stat",
-        ascending: bool = False,
-    ):
-        res_table = pd.DataFrame(
-            self.result,
-            columns=["step", "inclusion", "stat", "pval", "penalized_stat"],
-        )
-        res_table = res_table.sort_values(
-            by=["step", sort_by],
-            ascending=[True, ascending],
-        ).reset_index(drop=True)
-        return res_table
-
-    def sort_score_fetcher(self, reverse: bool = False):
-        sorted_sf = sorted(self.score_fetcher.items(), key=lambda item: item[1], reverse=reverse)
-        return sorted_sf
 
 
 @dataclass
@@ -316,33 +290,33 @@ def score_step(context, state_and_effect, rank, step) -> ScoreSearchState:
     score_result = search_state.aux
     null_me = search_state.best_candidate_so_far.modelentry
 
-    results = [] if score_result is None else score_result.result
+    results = [] if score_result is None else score_result.results
     effect_fetcher, score_fetcher = {}, {}
     score_input = _prepare_test_input(context, null_me, effect_funcs, step)
     combinations = _get_combination(score_input.num_covars)
 
     for comb in combinations:
-        score_result, inclusion, inclusion_idx = run_score_test(comb, score_input)
+        test_result, inclusion, inclusion_idx = run_score_test(comb, score_input)
         assert inclusion_idx.size >= 0
         # covariate coefficient to unfix
         effect_subset = dict(
             item for i, item in enumerate(effect_funcs.items()) if i in inclusion_idx
         )
         effect_fetcher[inclusion] = effect_subset
-        score_fetcher[inclusion] = score_result.penalized_stat
+        score_fetcher[inclusion] = test_result.penalized_stat
         results.append(
             [
                 step,
                 _get_covar_names(effect_subset),
-                score_result.stat,
-                score_result.pval,
-                score_result.penalized_stat,
+                test_result.stat,
+                test_result.pval,
+                test_result.penalized_stat,
             ]
         )
     rank = min(len(score_fetcher), rank) if rank else len(score_fetcher)
     # NOTE: aux table's lines may scale up as search_space increases
-    teststep_res = StepResult(rank, results, score_fetcher, effect_fetcher)
-    search_state = replace(search_state, aux=teststep_res)
+    step_res = StepResult(rank, results, score_fetcher, effect_fetcher)
+    search_state = replace(search_state, aux=step_res)
 
     return search_state
 
@@ -426,9 +400,9 @@ def score_nonlinear_model_selection(context, step, search_state, effect_funcs, p
     # prepare nonlinear model selection
     remaining_effect_funcs, new_models, candidate_steps = {}, {}, {}
     new_modelentries = []
-    score_fetcher = score_result.sort_score_fetcher(reverse=True)
+    score_fetcher = score_result.sorted_score_fetcher(reverse=True)
     rank = score_result.rank
-    effect_fetcher = score_result.effect_fetcher
+    effect_fetcher = score_result.effect_func_fetcher
 
     for r in range(rank):
         inc = score_fetcher[r][0]
@@ -490,7 +464,7 @@ def score_task_results(
     base_modelentry, *rest_modelentries = modelentries
     best_modelentry = state.best_candidate_so_far.modelentry
     user_input_modelentry = state.user_input_modelentry
-    score_results = state.aux.processed_result()
+    score_results = state.aux.processed_results()
     tables = _score_create_result_tables(
         candidates,
         best_modelentry,

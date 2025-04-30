@@ -72,7 +72,7 @@ from pharmpy.tools.covsearch.util import (
     DummyEffect,
     SearchState,
     StateAndEffect,
-    BackwardStep,
+    StepResult,
     Test,
     TestResult,
     store_input_model,
@@ -148,39 +148,10 @@ class WaldInput:
     num_covars: int  # number of covariate parameters
 
 
-class WAMStep(BackwardStep):
-    pass
-
-
-@dataclass
-class WAMResult:
-    rank: int
-    results: list
-    score_fetcher: dict
-    effect_func_fetcher: dict
-
-    @property
-    def processed_results(self):
-        res_table = pd.DataFrame(
-            self.results,
-            columns=["inclusion", "Wald_Stat", "Wald_Test_pvalue", "Penalized_Wald_Stat"],
-        )
-        res_table = res_table.sort_values(
-            by="Penalized_Wald_Stat",
-            ascending=True,
-        ).reset_index(drop=True)
-        return res_table
-
-    @property
-    def sorted_score_fetcher(self):
-        sorted_sf = sorted(self.score_fetcher.items(), key=lambda item: item[1])
-        return sorted_sf
-
-
 @dataclass
 class WAMSearchState(SearchState):
     wam_full: Model
-    wam_result: Optional[WAMResult] = None
+    wam_result: Optional[StepResult] = None
 
     def __eq__(self, other):
         if not isinstance(other, SearchState):
@@ -390,6 +361,7 @@ def wam_step(
         wald_result, inclusion, inclusion_idx = run_wald_test(comb, wald_input)
         results.append(
             [
+                np.nan, # placeholder for step
                 inclusion,
                 wald_result.stat,
                 wald_result.pval,
@@ -405,10 +377,10 @@ def wam_step(
             score_fetcher[inclusion] = wald_result.penalized_stat
 
     rank = min(len(score_fetcher), rank) if rank else len(score_fetcher)
-    wam_result = WAMResult(rank, results, score_fetcher, effect_func_fetcher)
+    wam_result = StepResult(rank, results, score_fetcher, effect_func_fetcher)
     search_state = replace(search_state, wam_result=wam_result)
 
-    _wam_loginfo(context, wam_result.processed_results, rank)
+    _wam_loginfo(context, wam_result.processed_results(), rank)
 
     return search_state
 
@@ -457,13 +429,13 @@ def wam_nonlinear_model_selection(
     best_me = search_state.best_candidate_so_far.modelentry
     best_bic = calculate_bic(best_me.model, best_me.modelfit_results.ofv, "mixed")
     wam_result = search_state.wam_result
-    assert isinstance(wam_result, WAMResult), "Expected WAMResult instance"
+    assert isinstance(wam_result, StepResult), "Expected StepResult instance"
 
     # GENERATE CANDIDATE MODELS
     candidate_steps = []
     new_modelentries = []
 
-    score_fetcher = wam_result.sorted_score_fetcher
+    score_fetcher = wam_result.sorted_score_fetcher()
     effect_func_fetcher = wam_result.effect_func_fetcher
 
     for r in range(wam_result.rank):
@@ -532,7 +504,7 @@ def wam_nonlinear_model_selection(
 
 
 def _wam_nonlin_loginfo(context, best_bic, bic_values, wam_result):
-    score_fetcher = wam_result.sorted_score_fetcher
+    score_fetcher = wam_result.sorted_score_fetcher()
 
     log_info = [f"NONLINEAR MODEL RANK\n FULL MODEL: BIC {best_bic:.3f}\n"]
     for r in range(wam_result.rank):
@@ -544,8 +516,8 @@ def _wam_nonlin_loginfo(context, best_bic, bic_values, wam_result):
 
 # ============= WAM RESULTS ===============
 def wam_task_result(context, p_backward: float, strictness: str, state: WAMSearchState):
-    if isinstance(state.wam_result, WAMResult):
-        wam_result_table = state.wam_result.processed_results
+    if isinstance(state.wam_result, StepResult):
+        wam_result_table = state.wam_result.processed_results()
     else:
         wam_result_table = None
     candidates = state.all_candidates_so_far
@@ -688,7 +660,7 @@ def _make_wam_step_row(me_dict, children_count, best_model, candidate):
         dofv = reduced_ofv - extended_ofv
         reduced_bic = (
             np.nan
-            if (reduced_ofv) is None
+            if reduced_ofv is None
             else calculate_bic(candidate_model, reduced_ofv, "mixed")
         )
         extended_bic = (

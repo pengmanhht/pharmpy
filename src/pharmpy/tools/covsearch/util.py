@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from pharmpy.deps import numpy as np
+from pharmpy.deps import pandas as pd
 from pharmpy.model import Model
 from pharmpy.modeling import (
     add_estimation_step,
@@ -65,9 +66,27 @@ class StateAndEffect:
 
 
 @dataclass
-class LinStateAndEffect(StateAndEffect):
-    linear_models: dict
-    param_cov_list: dict
+class StepResult:
+    rank: int
+    results: list
+    score_fetcher: dict
+    effect_func_fetcher: dict
+
+    def processed_results(self):
+        # TODO: add step column for WAM and just keep the best 5 results for each step in WAM
+        res_table = pd.DataFrame(
+            self.results,
+            columns=["step", "inclusion", "stat", "pval", "penalized_stat"]
+        )
+        res_table = res_table.sort_values(
+            by=["step", "penalized_stat"],
+            ascending=[True, True],
+        ).reset_index(drop=True)
+        return res_table
+
+    def sorted_score_fetcher(self, reverse: bool = False):
+        sorted_sf = sorted(self.score_fetcher.items(), key=lambda item: item[1], reverse=reverse)
+        return sorted_sf
 
 
 @dataclass
