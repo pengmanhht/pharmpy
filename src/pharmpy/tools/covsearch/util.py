@@ -1,5 +1,8 @@
+from abc import abstractmethod
 from dataclasses import dataclass
+from typing import Optional
 
+from pharmpy.deps import numpy as np
 from pharmpy.model import Model
 from pharmpy.modeling import (
     add_estimation_step,
@@ -61,6 +64,53 @@ class StateAndEffect:
 class LinStateAndEffect(StateAndEffect):
     linear_models: dict
     param_cov_list: dict
+
+
+@dataclass
+class TestResult:
+    stat: Optional[float]
+    pval: Optional[float]
+    penalized_stat: Optional[float]
+
+
+class Test:
+    def __init__(self, num_params: Optional[int] = None, num_obs: Optional[int] = None) -> None:
+        """
+        Initialize Wald test class.
+        num_params: number of parameters remaining in the submodel, used for
+            penalized_stat calculation
+        num_obs: number of observations in the dataset, used for penalized_stat
+            calculation
+        """
+        self.num_params = num_params
+        self.num_obs = num_obs
+
+    @property
+    @abstractmethod
+    def statistic(self) -> float:
+        pass
+
+    @property
+    @abstractmethod
+    def pval(self) -> float:
+        pass
+
+    @property
+    def penalized_stat(self) -> float:
+        return self.statistic - self._penalty
+
+    @property
+    def _penalty(self) -> float:
+        if self.num_obs is None:
+            raise ValueError("number of observations required for calculating penalized_stat")
+        return self.num_params * np.log(self.num_obs)
+
+    def run(self):
+        return TestResult(
+            stat=self.statistic,
+            pval=self.pval,
+            penalized_stat=self.penalized_stat,
+        )
 
 
 def store_input_model(context, model, results, max_eval=False):

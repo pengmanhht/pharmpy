@@ -73,6 +73,8 @@ from pharmpy.tools.covsearch.util import (
     SearchState,
     StateAndEffect,
     Step,
+    Test,
+    TestResult,
     store_input_model,
 )
 from pharmpy.tools.mfl.parse import ModelFeatures
@@ -85,28 +87,8 @@ from pharmpy.workflows import ModelEntry, Task, Workflow, WorkflowBuilder
 from pharmpy.workflows.results import ModelfitResults
 
 
-class Test:
-    def __init__(self):
-        pass
-
-    def statistic(self) -> Optional[float]:
-        pass
-
-    def p_value(self) -> Optional[float]:
-        pass
-
-    def penalized_stat(self) -> Optional[float]:
-        pass
-
-
 class WaldTest(Test):
-    def __init__(
-        self,
-        thetas: Optional[np.ndarray],
-        covariance_matrix: Optional[np.ndarray],
-        num_params: int,
-        num_obs: Optional[int] = None,
-    ) -> None:
+    def __init__(self, thetas, covariance_matrix, num_params, num_obs):
         """
         Initialize Wald test class.
         num_params: number of parameters remaining in the submodel, used for
@@ -114,32 +96,32 @@ class WaldTest(Test):
         num_obs: number of observations in the dataset, used for penalized_stat
             calculation
         """
+        super().__init__(num_params, num_obs)
         self.thetas = thetas
         self.covmat = covariance_matrix
-        self.num_params = num_params
-        self.num_obs = num_obs
 
-    def statistic(self) -> float:
-        """perform Wald test and calculate Wald Statistic"""
+    @property
+    def statistic(self):
         if self.thetas is not None and self.covmat is not None:
             try:
-                statistic = self.thetas.T @ np.linalg.inv(self.covmat) @ self.thetas
-                statistic = float(statistic.squeeze())
+                stat = self.thetas.T @ np.linalg.inv(self.covmat) @ self.thetas
+                stat = float(stat.squeeze())
             except np.linalg.LinAlgError:
                 raise ValueError("Failed to compute Wald statistic: singular covariance matrix")
         else:
-            statistic = 0
+            stat = 0
 
-        return statistic
+        return stat
 
-    def p_value(self) -> float:
+    @property
+    def pval(self):
         """
         calculate Wald test p-value
         """
-        if (wald_stat := self.statistic()) is not None and self.thetas is not None:
+        if (stat := self.statistic) is not None and self.thetas is not None:
             try:
                 # df: len(thetas), the number of excluded parameters
-                pval = stats.chi2.sf(wald_stat, len(self.thetas))
+                pval = stats.chi2.sf(stat, len(self.thetas))
                 pval = float(pval)
             except Exception as e:
                 raise ValueError(f"Failed to compute p-value: {str(e)}")
@@ -148,36 +130,13 @@ class WaldTest(Test):
 
         return pval
 
-    def penalized_stat(self) -> Optional[float]:
+    @property
+    def _penalty(self) -> float:
         """
-        calculate penalized Wald statistic
+        Penalzied Wald Statistic = Wald Statisitc + n_estimated_parameters * log(n_obs)
+        Small values of penalized Wald statistic indicate a better fit and more probable model
         """
-
-        if self.num_obs is None:
-            raise ValueError(
-                "Number of observations (num_obs) required for calculating penalized_stat of type 'bic'"
-            )
-        wald_stat = self.statistic()
-        try:
-            penalized_stat = wald_stat + self.num_params * np.log(self.num_obs)
-        except Exception as e:
-            raise ValueError(f"Failed to compute penalized statistic: {str(e)}")
-
-        return penalized_stat
-
-    def wald_results(self):
-        return WaldResult(
-            stat=self.statistic(),
-            pval=self.p_value(),
-            penalized_stat=self.penalized_stat(),
-        )
-
-
-@dataclass
-class WaldResult:
-    stat: Optional[float]
-    pval: Optional[float]
-    penalized_stat: Optional[float]
+        return -super()._penalty
 
 
 @dataclass
@@ -406,11 +365,9 @@ def run_wald_test(
     if len(exclusion_idx) >= 0:
         sub_thetas = wald_input.thetas[exclusion_idx].reshape(-1, 1)
         sub_covmat = wald_input.covmat[np.ix_(exclusion_idx, exclusion_idx)]
-        wald_result = WaldTest(
-            sub_thetas, sub_covmat, num_params, wald_input.num_obs
-        ).wald_results()
+        wald_result = WaldTest(sub_thetas, sub_covmat, num_params, wald_input.num_obs).run()
     else:
-        wald_result = WaldResult(np.inf, 1.0, np.inf)
+        wald_result = TestResult(np.inf, 1.0, np.inf)
 
     inclusion = ",".join(map(str, inclusion_idx))
 

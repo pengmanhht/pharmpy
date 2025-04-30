@@ -22,7 +22,6 @@ NOTE: NONMEM has difficulty evaluating variances and gradients around thetas tha
     to:   Parameter_i = Parameter + (THETA - 1) * Covariate_i + ETA_i
 """
 
-from abc import abstractmethod
 from dataclasses import dataclass, replace
 from functools import partial
 from itertools import count, product
@@ -62,6 +61,8 @@ from pharmpy.tools.covsearch.util import (
     ForwardStep,
     SearchState,
     StateAndEffect,
+    Test,
+    TestResult,
     store_input_model,
 )
 from pharmpy.tools.mfl.parse import ModelFeatures
@@ -72,41 +73,6 @@ from pharmpy.tools.run import (
 )
 from pharmpy.workflows import ModelEntry, Task, Workflow, WorkflowBuilder
 from pharmpy.workflows.results import ModelfitResults
-
-
-class Test:
-    def __init__(self, num_params: Optional[int] = None, num_obs: Optional[int] = None) -> None:
-        self.num_params = num_params
-        self.num_obs = num_obs
-
-    @property
-    @abstractmethod
-    def statistic(self) -> float:
-        pass
-
-    @property
-    @abstractmethod
-    def pval(self) -> float:
-        pass
-
-    @property
-    def penalized_stat(self) -> float:
-        if self.num_obs is None:
-            raise ValueError("number of observations required for calculating penalized statistic")
-        base_stat = self.statistic
-        try:
-            penalized_stat = base_stat - self.num_params * np.log(self.num_obs)
-        except Exception as e:
-            raise ValueError(f"Failed to compute penalized statistic: {str(e)}")
-
-        return penalized_stat
-
-    def result(self):
-        return TestResult(
-            stat=self.statistic,
-            pval=self.pval,
-            penalized_stat=self.penalized_stat,
-        )
 
 
 class ScoreTest(Test):
@@ -138,13 +104,6 @@ class ScoreTest(Test):
         else:
             pval = np.nan
         return pval
-
-
-@dataclass
-class TestResult:
-    stat: Optional[float]
-    pval: Optional[float]
-    penalized_stat: Optional[float]
 
 
 @dataclass
@@ -398,7 +357,7 @@ def run_score_test(comb, score_input):
     if len(exclusion_idx) >= 0:
         sub_scores = score_input.scores[inclusion_idx].reshape(-1, 1)
         sub_covmat = score_input.covmat[np.ix_(inclusion_idx, inclusion_idx)]
-        score_result = ScoreTest(sub_scores, sub_covmat, num_params, score_input.num_obs).result()
+        score_result = ScoreTest(sub_scores, sub_covmat, num_params, score_input.num_obs).run()
 
     else:
         score_result = TestResult(np.nan, 1, np.nan)
@@ -412,6 +371,7 @@ def _get_combination(num_covars: int, min_inclusion: bool = True):
         return np.eye(num_covars)
     else:
         return product([0, 1], repeat=num_covars)
+
 
 def _set_score_estimation_step(model):
     for i in range(len(model.execution_steps)):
@@ -431,6 +391,7 @@ def _set_score_estimation_step(model):
 
     model = add_parameter_uncertainty_step(model, "RMAT")
     return model
+
 
 def _prepare_test_input(context, null_modelentry, effect_fucns, step) -> ScoreInput:
     covar_names = _get_covar_names(effect_fucns)
