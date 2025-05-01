@@ -88,6 +88,15 @@ class StepResult:
         sorted_sf = sorted(self.score_fetcher.items(), key=lambda item: item[1], reverse=reverse)
         return sorted_sf
 
+    def __eq__(self, other):
+        if not isinstance(other, SearchState):
+            return NotImplemented
+        # compare only best_candidate_so_far and all_candidates_so_far
+        return (self.best_candidate_so_far, self.all_candidates_so_far) == (
+            other.best_candidate_so_far,
+            other.all_candidates_so_far,
+        )
+
 
 @dataclass
 class TestResult:
