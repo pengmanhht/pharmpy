@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from pharmpy.deps import numpy as np
@@ -52,20 +52,6 @@ class Candidate:
 
 
 @dataclass
-class SearchState:
-    user_input_modelentry: ModelEntry
-    start_modelentry: ModelEntry
-    best_candidate_so_far: Candidate
-    all_candidates_so_far: list[Candidate]
-
-
-@dataclass
-class StateAndEffect:
-    search_state: SearchState
-    effect_funcs: dict
-
-
-@dataclass
 class StepResult:
     rank: int
     results: list
@@ -88,6 +74,19 @@ class StepResult:
         sorted_sf = sorted(self.score_fetcher.items(), key=lambda item: item[1], reverse=reverse)
         return sorted_sf
 
+
+@dataclass
+class SearchState:
+    user_input_modelentry: ModelEntry
+    start_modelentry: ModelEntry
+    best_candidate_so_far: Candidate
+    all_candidates_so_far: list[Candidate]
+
+    # auxiliaries
+    aux_model: Optional[ModelEntry] = None # Used by WAM
+    aux_result: Optional[StepResult] = None # Used by WAM and Score
+    aux_list: list = field(default_factory=list) # Used by SAMBA
+
     def __eq__(self, other):
         if not isinstance(other, SearchState):
             return NotImplemented
@@ -96,6 +95,12 @@ class StepResult:
             other.best_candidate_so_far,
             other.all_candidates_so_far,
         )
+
+
+@dataclass
+class StateAndEffect:
+    search_state: SearchState
+    effect_funcs: dict
 
 
 @dataclass
