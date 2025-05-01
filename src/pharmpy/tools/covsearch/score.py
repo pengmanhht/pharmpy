@@ -108,11 +108,6 @@ class ScoreTest(Test):
 
 
 @dataclass
-class ScoreSearchState(SearchState):
-    aux: Optional[StepResult] = None
-
-
-@dataclass
 class ScoreInput:
     scores: np.ndarray
     covmat: np.ndarray
@@ -201,7 +196,7 @@ def score_init_state_and_effect(context, search_space, input_modelentry):
 
     candidate = Candidate(null_modelentry, ())
 
-    search_state = ScoreSearchState(
+    search_state = SearchState(
         user_input_modelentry=input_modelentry,
         start_modelentry=null_modelentry,
         best_candidate_so_far=candidate,
@@ -284,10 +279,10 @@ def _get_covar_names(effect_funcs):
     return covar_names
 
 
-def score_step(context, state_and_effect, rank, step) -> ScoreSearchState:
+def score_step(context, state_and_effect, rank, step) -> SearchState:
     effect_funcs = state_and_effect.effect_funcs
     search_state = state_and_effect.search_state
-    score_result = search_state.aux
+    score_result = search_state.aux_result
     null_me = search_state.best_candidate_so_far.modelentry
 
     results = [] if score_result is None else score_result.results
@@ -316,7 +311,7 @@ def score_step(context, state_and_effect, rank, step) -> ScoreSearchState:
     rank = min(len(score_fetcher), rank) if rank else len(score_fetcher)
     # NOTE: aux table's lines may scale up as search_space increases
     step_res = StepResult(rank, results, score_fetcher, effect_fetcher)
-    search_state = replace(search_state, aux=step_res)
+    search_state = replace(search_state, aux_result=step_res)
 
     return search_state
 
@@ -394,7 +389,7 @@ def _prepare_test_input(context, null_modelentry, effect_fucns, step) -> ScoreIn
 def score_nonlinear_model_selection(context, step, search_state, effect_funcs, p_forward):
     best_me = search_state.best_candidate_so_far.modelentry
     best_bic = calculate_bic(best_me.model, best_me.modelfit_results.ofv, "mixed")
-    score_result = search_state.aux
+    score_result = search_state.aux_result
     assert isinstance(score_result, StepResult)
 
     # prepare nonlinear model selection
@@ -464,7 +459,7 @@ def score_task_results(
     base_modelentry, *rest_modelentries = modelentries
     best_modelentry = state.best_candidate_so_far.modelentry
     user_input_modelentry = state.user_input_modelentry
-    score_results = state.aux.processed_results()
+    score_results = state.aux_result.processed_results()
     tables = _score_create_result_tables(
         candidates,
         best_modelentry,
