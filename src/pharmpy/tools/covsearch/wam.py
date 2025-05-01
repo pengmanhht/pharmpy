@@ -149,20 +149,6 @@ class WaldInput:
     num_covars: int  # number of covariate parameters
 
 
-@dataclass
-class WAMSearchState(SearchState):
-    wam_full: Model
-    wam_result: Optional[StepResult] = None
-
-    def __eq__(self, other):
-        if not isinstance(other, SearchState):
-            return NotImplemented
-        return (self.best_candidate_so_far, self.all_candidates_so_far) == (
-            other.best_candidate_so_far,
-            other.all_candidates_so_far,
-        )
-
-
 def wam_workflow(
     model: Model,
     results: ModelfitResults,
@@ -213,12 +199,12 @@ def wam_init_state_and_effect(context, search_space, input_modelentry):
     candidate = Candidate(full_me, steps=())
 
     # init search state
-    search_state = WAMSearchState(
+    search_state = SearchState(
         user_input_modelentry=input_me,
         start_modelentry=full_me,
         best_candidate_so_far=candidate,
         all_candidates_so_far=[candidate],
-        wam_full=_ful_me,
+        aux_model=_ful_me,
     )
 
     return StateAndEffect(search_state=search_state, effect_funcs=effect_funcs)
@@ -346,10 +332,10 @@ def wam_step(
     context,
     state_and_effect,
     rank,
-) -> WAMSearchState:
+) -> SearchState:
     effect_funcs = state_and_effect.effect_funcs
     search_state = state_and_effect.search_state
-    wam_full = search_state.wam_full
+    wam_full = search_state.aux_model
 
     results = []
     effect_func_fetcher, score_fetcher = {}, {}
@@ -424,12 +410,12 @@ def prepare_wald_input(modelentry: ModelEntry, effect_funcs: dict) -> WaldInput:
 
 def wam_nonlinear_model_selection(
     context,
-    search_state: WAMSearchState,
+    search_state: SearchState,
     p_backward: float,
 ) -> tuple:
     best_me = search_state.best_candidate_so_far.modelentry
     best_bic = calculate_bic(best_me.model, best_me.modelfit_results.ofv, "mixed")
-    wam_result = search_state.wam_result
+    wam_result = search_state.aux_result
     assert isinstance(wam_result, StepResult), "Expected StepResult instance"
 
     # GENERATE CANDIDATE MODELS
@@ -516,9 +502,9 @@ def _wam_nonlin_loginfo(context, best_bic, bic_values, wam_result):
 
 
 # ============= WAM RESULTS ===============
-def wam_task_result(context, p_backward: float, strictness: str, state: WAMSearchState):
-    if isinstance(state.wam_result, StepResult):
-        wam_result_table = state.wam_result.processed_results()
+def wam_task_result(context, p_backward: float, strictness: str, state: SearchState):
+    if isinstance(state.aux_result, StepResult):
+        wam_result_table = state.aux_result.processed_results()
     else:
         wam_result_table = None
     candidates = state.all_candidates_so_far
