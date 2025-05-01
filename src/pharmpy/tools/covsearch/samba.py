@@ -64,20 +64,6 @@ from pharmpy.workflows import ModelEntry, Task, Workflow, WorkflowBuilder
 from pharmpy.workflows.results import ModelfitResults
 
 
-@dataclass
-class LCSSearchState(SearchState):
-    lcs_selection: list = field(default_factory=list)
-
-    def __eq__(self, other):
-        if not isinstance(other, SearchState):
-            return NotImplemented
-        # compare only best_candidate_so_far and all_candidates_so_far
-        return (self.best_candidate_so_far, self.all_candidates_so_far) == (
-            other.best_candidate_so_far,
-            other.all_candidates_so_far,
-        )
-
-
 @dataclass(frozen=True)
 class SAMBAStep(ForwardStep):
     pass
@@ -347,7 +333,7 @@ def samba_init_nonlinear_search_state(
         filtered_modelentry = input_modelentry
 
     candidate = Candidate(modelentry=filtered_modelentry, steps=())
-    return LCSSearchState(input_modelentry, filtered_modelentry, candidate, [candidate])
+    return SearchState(input_modelentry, filtered_modelentry, candidate, [candidate])
 
 
 def set_samba_estimation(model, nsamples, algorithm):
@@ -504,7 +490,7 @@ def linear_covariate_selection(
         selection_results = pd.concat([selection_results, model_table], ignore_index=True)
 
     selection_results.insert(0, "covsearch_step", step)
-    search_state.lcs_selection.append(selection_results)
+    search_state.aux_list.append(selection_results)
 
     coveffect_keys = _coveffect_list2key(selected_covariates)
     coveffect_funcs = _retrieve_covfunc(effect_funcs, coveffect_keys)
@@ -1384,7 +1370,7 @@ def samba_task_results(
     p_backward: float,
     strictness: str,
     algorithm: str,
-    state: LCSSearchState,
+    state: SearchState,
 ):
     candidates = state.all_candidates_so_far
     modelentries = list(map(lambda candidate: candidate.modelentry, candidates))
@@ -1392,7 +1378,7 @@ def samba_task_results(
     assert base_modelentry is state.start_modelentry
     best_modelentry = state.best_candidate_so_far.modelentry
     user_input_modelentry = state.user_input_modelentry
-    lcs_results = _make_lcs_table(state.lcs_selection, p_forward)
+    lcs_results = _make_lcs_table(state.aux_list, p_forward)
     tables = _samba_create_result_tables(
         candidates,
         best_modelentry,
