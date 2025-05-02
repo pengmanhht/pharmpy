@@ -59,7 +59,6 @@ class StepResult:
     effect_func_fetcher: dict
 
     def processed_results(self):
-        # TODO: add step column for WAM and just keep the best 5 results for each step in WAM
         res_table = pd.DataFrame(
             self.results,
             columns=["step", "inclusion", "stat", "pval", "penalized_stat"]

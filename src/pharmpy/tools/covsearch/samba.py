@@ -633,7 +633,6 @@ def _stepwise_linear_covariate_selection(
         scores, models = {}, {}
 
         for covariate in remaining:
-            # TODO: parallel the linear model fitting runs
             X = data_with_const[["const"] + selected + [covariate]]
             # NOTE: an issue specific to statsmodels: we would like to use df_model to get number of parameteres
             # however, the df_model is defined as the rank of the regressor matrix MINUS ONE if a constant is included
