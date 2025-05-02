@@ -365,7 +365,7 @@ def wam_step(
 
     rank = min(len(score_fetcher), rank) if rank else len(score_fetcher)
     wam_result = StepResult(rank, results, score_fetcher, effect_func_fetcher)
-    search_state = replace(search_state, wam_result=wam_result)
+    search_state = replace(search_state, aux_result=wam_result)
 
     _wam_loginfo(context, wam_result.processed_results(), rank)
 
