@@ -82,7 +82,6 @@ class SearchState:
     all_candidates_so_far: list[Candidate]
 
     # auxiliaries
-    aux_model: Optional[ModelEntry] = None # Used by WAM
     aux_result: Optional[StepResult] = None # Used by WAM and Score
     aux_list: list = field(default_factory=list) # Used by SAMBA
 

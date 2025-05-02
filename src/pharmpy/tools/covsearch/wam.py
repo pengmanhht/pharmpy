@@ -193,7 +193,7 @@ def wam_init_state_and_effect(context, search_space, input_modelentry):
     input_me = ModelEntry.create(model=filtered_model)
 
     # prepare full model (call fit workflow inside the function)
-    full_me, _ful_me = prepare_wam_full_model(context, filtered_model, effect_funcs)
+    full_me = prepare_wam_full_model(context, filtered_model, effect_funcs)
 
     # init candiate
     candidate = Candidate(full_me, steps=())
@@ -204,31 +204,25 @@ def wam_init_state_and_effect(context, search_space, input_modelentry):
         start_modelentry=full_me,
         best_candidate_so_far=candidate,
         all_candidates_so_far=[candidate],
-        aux_model=_ful_me,
     )
 
     return StateAndEffect(search_state=search_state, effect_funcs=effect_funcs)
 
 
 def prepare_wam_full_model(context, model, effect_funcs):
-    """
-    prepare full model for wam covsearch
-     full_model: model with all covariate effects, fitted with SAEM + IMP for robust OFV
-     _ful_model: model for wam step
-    """
     # add covariate effects
     desc = "full_model"
     for covfuncs in effect_funcs.values():
         model = covfuncs(model)
     full_model = model.replace(name="full_model", description=desc)
-    full_model, _ful_model = set_wam_estimation_step(full_model)
+    full_model = set_wam_estimation_step(full_model)
 
     # fit full models
     full_me = ModelEntry.create(model=full_model, parent=None)
-    _ful_me = ModelEntry.create(model=_ful_model, parent=None)
-    full_me, _ful_me = _fit_many(context, [full_me, _ful_me])
+    fit_wf = create_fit_workflow(modelentries=[full_me])
+    full_me = context.call_workflow(fit_wf, "fit_full_model")
 
-    return full_me, _ful_me
+    return full_me
 
 
 def _fit_many(context, modelentries):
@@ -266,12 +260,7 @@ def set_wam_estimation_step(model):
         keep_every_nth_iter=50,
         tool_options={"NOABORT": 0},
     )
-
-    # COV step
-    _model = add_parameter_uncertainty_step(model, "RMAT")
-    _model = _model.replace(name="wam_" + model.name)
-
-    # full model
+    # IMP
     model = add_estimation_step(
         model,
         method="IMP",
@@ -281,7 +270,10 @@ def set_wam_estimation_step(model):
         isample=1000,
         tool_options={"EONLY": "1"},
     )
-    return model, _model
+    # COV step
+    model = add_parameter_uncertainty_step(model, "RMAT")
+
+    return model
 
 
 def _get_covar_names(effect_funcs):
@@ -335,7 +327,7 @@ def wam_step(
 ) -> SearchState:
     effect_funcs = state_and_effect.effect_funcs
     search_state = state_and_effect.search_state
-    wam_full = search_state.aux_model
+    wam_full = search_state.start_modelentry
 
     results = []
     effect_func_fetcher, score_fetcher = {}, {}
@@ -443,7 +435,7 @@ def wam_nonlinear_model_selection(
 
         # update model metadata
         updated_model = updated_model.replace(name=f"wam_rank#{r + 1}", description=desc)
-        updated_model, _ = set_wam_estimation_step(updated_model)
+        updated_model = set_wam_estimation_step(updated_model)
 
         # fit the updated_model
         candidate_steps.append(steps)
