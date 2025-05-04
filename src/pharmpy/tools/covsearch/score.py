@@ -345,7 +345,7 @@ def _get_combination(num_covars: int, min_inclusion: bool = True):
 def _set_score_estimation_step(model):
     for i in range(len(model.execution_steps)):
         model = remove_estimation_step(model, 0)
-
+    # SAEM EONLY
     model = add_estimation_step(
         model,
         method="SAEM",
@@ -356,6 +356,16 @@ def _set_score_estimation_step(model):
         isample=2,
         keep_every_nth_iter=50,
         tool_options={"NOABORT": 0, "EONLY": "1"},
+    )
+    # IMP EONLY
+    model = add_estimation_step(
+        model,
+        method="IMP",
+        idx=1,
+        interaction=True,
+        niter=20,
+        isample=1000,
+        tool_options={"EONLY": "1"},
     )
 
     model = add_parameter_uncertainty_step(model, "RMAT")
